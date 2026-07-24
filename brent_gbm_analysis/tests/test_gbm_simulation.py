@@ -87,12 +87,15 @@ def test_quantiles_row_count() -> None:
 @pytest.mark.skipif(_PREREQ_MISSING, reason=_PREREQ_SKIP_REASON)
 def test_quantiles_day_zero_is_s0() -> None:
     """At day 0 all quantiles should equal S0 (initial price)."""
+    from src.simulate_gbm import load_initial_price  # noqa: PLC0415
+
     df = _load_quantiles()
     row0 = df[df["day"] == 0].iloc[0]
-    # All quantile columns should be equal (within floating-point tolerance)
+    S0 = load_initial_price()
+    # All quantile columns should equal S0 (within floating-point tolerance)
     for col in ["q05", "q25", "q50", "q75", "q95"]:
-        assert abs(row0[col] - row0["q50"]) < 1e-6, (
-            f"{col} at day 0 differs from q50: {row0[col]} vs {row0['q50']}"
+        assert abs(row0[col] - S0) < 1e-6, (
+            f"{col} at day 0 ({row0[col]:.6f}) differs from S0 ({S0:.6f})"
         )
 
 
