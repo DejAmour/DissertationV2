@@ -67,3 +67,49 @@ The Ito correction (`+ 0.5 × sigma²`) converts the mean log-return
 | `outputs/tables/gbm_parameters.csv` | Estimated `sigma_annual`, `mu_annual`, `n_returns` |
 | `outputs/tables/return_diagnostics.csv` | Mean, std, min, max (and optionally skew/kurtosis) of daily log returns |
 | `outputs/figures/log_returns_histogram.png` | Histogram of daily log returns |
+
+---
+
+## Stage 3 — GBM simulation
+
+Uses the Stage 2 parameters to simulate GBM price paths and produces
+dissertation-ready fan charts and terminal distribution summaries.
+
+```bash
+cd brent_gbm_analysis
+python src/simulate_gbm.py
+pytest tests/test_gbm_simulation.py -q
+```
+
+> **Prerequisites**: Stages 1 and 2 must be run first so that
+> `data/processed/brent_prices_2000_2025_clean.csv` and
+> `outputs/tables/gbm_parameters.csv` both exist.
+
+### Simulation formula
+
+Exact GBM discretization:
+
+```
+S_{t+1} = S_t × exp((mu − 0.5×sigma²)×dt + sigma×sqrt(dt)×Z_t)
+```
+
+where `Z_t ~ N(0, 1)` i.i.d. and `dt = 1/252` (one trading day).
+
+### Parameterization defaults
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `S0` | last observed close | Initial price loaded from Stage 1 cleaned CSV |
+| `horizon_days` | 252 | Number of trading days to simulate |
+| `n_paths` | 5000 | Number of independent Monte Carlo paths |
+| `dt` | 1/252 | Length of each time step (in years) |
+| `random_seed` | 42 | NumPy seed for reproducibility |
+
+### Stage 3 outputs
+
+| File | Description |
+|------|-------------|
+| `outputs/tables/simulation_quantiles.csv` | Day-by-day price quantiles (q05, q25, q50, q75, q95) across all paths |
+| `outputs/tables/terminal_distribution_summary.csv` | Mean, std, min, max and percentiles of the terminal (day-252) price distribution |
+| `outputs/figures/gbm_fan_chart.png` | Median + percentile bands fan chart over the simulation horizon |
+| `outputs/figures/terminal_price_histogram.png` | Histogram of simulated terminal prices |
