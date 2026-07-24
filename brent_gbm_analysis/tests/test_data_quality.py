@@ -35,6 +35,16 @@ def _load_latest_raw() -> pd.DataFrame:
 
 def _expected_missing_count_from_raw() -> int:
     raw = _load_latest_raw().copy()
+    raw.columns = raw.columns.str.strip().str.upper()
+    if "OBSERVATION_DATE" in raw.columns and "DATE" not in raw.columns:
+        raw = raw.rename(columns={"OBSERVATION_DATE": "DATE"})
+    required = {"DATE", "DCOILBRENTEU"}
+    if not required.issubset(raw.columns):
+        missing = required - set(raw.columns)
+        raise ValueError(
+            f"Raw CSV missing required columns: {', '.join(sorted(missing))}. "
+            f"Discovered columns: {list(raw.columns)}"
+        )
     raw["DATE"] = pd.to_datetime(raw["DATE"], errors="coerce")
     raw = raw[(raw["DATE"] >= "2000-01-01") & (raw["DATE"] <= "2025-12-31")].copy()
     raw_values = raw["DCOILBRENTEU"].astype("string").str.strip()
