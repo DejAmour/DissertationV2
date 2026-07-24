@@ -36,13 +36,13 @@ brent_gbm_analysis/
 python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-pip install -r /home/runner/work/DissertationV2/DissertationV2/brent_gbm_analysis/requirements.txt
+pip install -r brent_gbm_analysis/requirements.txt
 ```
 
 ## Run Stage 1
 
 ```bash
-cd /home/runner/work/DissertationV2/DissertationV2/brent_gbm_analysis
+cd brent_gbm_analysis
 python src/download_data.py
 python src/prepare_data.py
 pytest tests/test_data_quality.py -q
