@@ -98,6 +98,7 @@ def estimate_gbm_parameters(log_returns: pd.Series) -> dict[str, float]:
         ``std_daily``    – std dev of daily log returns
         ``min_daily``    – minimum daily log return
         ``max_daily``    – maximum daily log return
+
     """
     r = log_returns.dropna()
     n = len(r)
@@ -111,10 +112,10 @@ def estimate_gbm_parameters(log_returns: pd.Series) -> dict[str, float]:
 
     T = TRADING_DAYS_PER_YEAR
 
-    # Annualised volatility: sigma = std(r) * sqrt(252)
+    # Annualized volatility: sigma = std(r) * sqrt(252)
     sigma_annual = std_r * math.sqrt(T)
 
-    # Annualised drift: mu = mean(r)*T + 0.5*sigma^2
+    # Annualized drift: mu = mean(r)*T + 0.5*sigma^2
     # Under GBM: E[r_t] = (mu - 0.5*sigma^2) / T  =>  mu = mean(r)*T + 0.5*sigma^2
     mu_annual = mean_r * T + 0.5 * sigma_annual ** 2
 

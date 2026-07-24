@@ -58,7 +58,7 @@ def test_output_files_exist() -> None:
 
 @pytest.mark.skipif(_PREREQ_MISSING, reason=_PREREQ_SKIP_REASON)
 def test_sigma_is_positive_and_finite() -> None:
-    """Estimated annualised volatility must be strictly positive and finite."""
+    """Estimated annualized volatility must be strictly positive and finite."""
     params = _load_params()
     sigma_row = params.loc[params["Parameter"] == "sigma_annual", "Value"]
     assert len(sigma_row) == 1, "sigma_annual row not found in gbm_parameters.csv"
@@ -69,7 +69,7 @@ def test_sigma_is_positive_and_finite() -> None:
 
 @pytest.mark.skipif(_PREREQ_MISSING, reason=_PREREQ_SKIP_REASON)
 def test_mu_is_finite() -> None:
-    """Estimated annualised drift must be finite."""
+    """Estimated annualized drift must be finite."""
     params = _load_params()
     mu_row = params.loc[params["Parameter"] == "mu_annual", "Value"]
     assert len(mu_row) == 1, "mu_annual row not found in gbm_parameters.csv"
