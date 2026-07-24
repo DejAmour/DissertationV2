@@ -86,8 +86,16 @@ def prepare_data() -> tuple[Path, Path, Path]:
     retrieval_date = provenance.get("retrieval_date", "")
 
     raw_df = pd.read_csv(raw_csv_path)
-    if not {"DATE", "DCOILBRENTEU"}.issubset(raw_df.columns):
-        raise ValueError("Raw CSV missing required columns: DATE, DCOILBRENTEU")
+    raw_df.columns = raw_df.columns.str.strip().str.upper()
+    if "OBSERVATION_DATE" in raw_df.columns and "DATE" not in raw_df.columns:
+        raw_df = raw_df.rename(columns={"OBSERVATION_DATE": "DATE"})
+    required = {"DATE", "DCOILBRENTEU"}
+    if not required.issubset(raw_df.columns):
+        missing = required - set(raw_df.columns)
+        raise ValueError(
+            f"Raw CSV missing required columns: {', '.join(sorted(missing))}. "
+            f"Discovered columns: {list(raw_df.columns)}"
+        )
 
     df = raw_df.copy()
     df["Date"] = pd.to_datetime(df["DATE"], errors="coerce")
