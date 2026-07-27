@@ -1,0 +1,8 @@
+timestamp_utc=2026-07-27T10:51:01.438469+00:00
+platform=Windows-11-10.0.26200-SP0
+python=3.13.1
+numpy=2.4.3
+pandas=3.0.1
+matplotlib=3.10.9
+scipy=1.17.1
+statsmodels=0.14.6

@@ -1,0 +1,11 @@
+{
+  "original_source": "US EIA Europe Brent Spot Price FOB (republished via FRED)",
+  "download_url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DCOILBRENTEU&cosd=2000-01-01&coed=2025-12-31",
+  "preferred_download_url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DCOILBRENTEU&cosd=2000-01-01&coed=2025-12-31",
+  "fallback_download_url": "https://raw.githubusercontent.com/datasets/oil-prices/main/data/brent-daily.csv",
+  "series_name": "DCOILBRENTEU",
+  "retrieval_date": "2026-07-27",
+  "raw_csv_filename": "DCOILBRENTEU_fred.csv",
+  "download_warning": "",
+  "source_note": "FRED series DCOILBRENTEU republishes underlying EIA data."
+}
