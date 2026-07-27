@@ -27,20 +27,9 @@ def project_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def _unique_raw_path(raw_dir: Path, base_filename: str) -> Path:
-    """Return a non-overwriting path inside the raw directory."""
-    candidate = raw_dir / base_filename
-    if not candidate.exists():
-        return candidate
-
-    stem = Path(base_filename).stem
-    suffix = Path(base_filename).suffix
-    index = 1
-    while True:
-        candidate = raw_dir / f"{stem}_{index}{suffix}"
-        if not candidate.exists():
-            return candidate
-        index += 1
+def _raw_path(raw_dir: Path, base_filename: str) -> Path:
+    """Return the canonical path for the raw file (always overwrites to keep filename stable)."""
+    return raw_dir / base_filename
 
 
 def download_brent_data() -> tuple[Path, Path]:
@@ -49,7 +38,7 @@ def download_brent_data() -> tuple[Path, Path]:
     raw_dir = root / "data" / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
 
-    csv_path = _unique_raw_path(raw_dir, DEFAULT_FILENAME)
+    csv_path = _raw_path(raw_dir, DEFAULT_FILENAME)
     source_url = DOWNLOAD_URL
     source_description = SOURCE_DESCRIPTION
     download_warning = ""
