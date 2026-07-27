@@ -166,9 +166,14 @@ def _build_processed_with_logs(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _period_log_returns(period_df: pd.DataFrame) -> pd.Series:
+    prices = period_df["Price_USD_per_barrel"].astype(float)
+    return np.log(prices / prices.shift(1)).dropna()
+
+
 def _period_descriptive(period_label: str, period_df: pd.DataFrame) -> dict[str, object]:
     prices = period_df["Price_USD_per_barrel"]
-    returns = period_df["Log_Return"].dropna()
+    returns = _period_log_returns(period_df)
     if returns.empty:
         raise ValueError(f"No return observations for period: {period_label}")
 
@@ -202,7 +207,7 @@ def _period_descriptive(period_label: str, period_df: pd.DataFrame) -> dict[str,
 
 
 def _normality_tail_tables(period_label: str, period_df: pd.DataFrame) -> tuple[dict[str, object], pd.DataFrame, pd.DataFrame]:
-    returns = period_df["Log_Return"].dropna()
+    returns = _period_log_returns(period_df)
     jb_stat, jb_p = stats.jarque_bera(returns)
     mu = float(returns.mean())
     sigma = float(returns.std(ddof=1))
@@ -228,8 +233,10 @@ def _normality_tail_tables(period_label: str, period_df: pd.DataFrame) -> tuple[
             }
         )
 
-    top = period_df.loc[period_df["Log_Return"].notna(), ["Date", "Price_USD_per_barrel", "Log_Return"]].copy()
-    top["Previous_Price_USD_per_barrel"] = period_df["Price_USD_per_barrel"].shift(1)
+    top = period_df[["Date", "Price_USD_per_barrel"]].copy()
+    top["Previous_Price_USD_per_barrel"] = top["Price_USD_per_barrel"].shift(1)
+    top["Log_Return"] = np.log(top["Price_USD_per_barrel"] / top["Previous_Price_USD_per_barrel"])
+    top = top.loc[top["Log_Return"].notna()].copy()
     top["Abs_Log_Return"] = top["Log_Return"].abs()
     top = top.sort_values("Abs_Log_Return", ascending=False).head(10)
     top.insert(0, "period", period_label)
@@ -413,20 +420,23 @@ def _ar1_and_adf_tables(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def _sample_period_comparison(
+    full_df: pd.DataFrame,
     descriptive_df: pd.DataFrame,
     normality_df: pd.DataFrame,
     tails_df: pd.DataFrame,
-    acf_df: pd.DataFrame,
     adf_df: pd.DataFrame,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
 
-    first_order_return = float(acf_df.loc[(acf_df["series"] == "returns") & (acf_df["lag"] == 1), "acf"].iloc[0])
-    first_order_squared = float(acf_df.loc[(acf_df["series"] == "squared_returns") & (acf_df["lag"] == 1), "acf"].iloc[0])
-
     for period_label, _, _ in PERIODS:
         drow = descriptive_df.loc[descriptive_df["period"] == period_label].iloc[0]
         nrow = normality_df.loc[normality_df["period"] == period_label].iloc[0]
+        period_df = full_df.loc[
+            (full_df["Date"] >= pd.Timestamp(drow["start_date"])) & (full_df["Date"] <= pd.Timestamp(drow["end_date"]))
+        ].copy()
+        period_returns = _period_log_returns(period_df)
+        acf1_returns = float(acf(period_returns, nlags=1, fft=False)[1])
+        acf1_squared = float(acf(period_returns.pow(2), nlags=1, fft=False)[1])
         outside3 = tails_df.loc[
             (tails_df["period"] == period_label) & (tails_df["sigma_threshold"] == 3), "empirical_frequency"
         ]
@@ -447,8 +457,8 @@ def _sample_period_comparison(
                 "jarque_bera_pvalue": float(nrow["jarque_bera_pvalue"]),
                 "freq_outside_3sigma": float(outside3.iloc[0]) if len(outside3) else np.nan,
                 "freq_outside_5sigma": float(outside5.iloc[0]) if len(outside5) else np.nan,
-                "acf1_returns": first_order_return,
-                "acf1_squared_returns": first_order_squared,
+                "acf1_returns": acf1_returns,
+                "acf1_squared_returns": acf1_squared,
                 "adf_stat_c": float(arow["adf_statistic"]) if pd.notna(arow["adf_statistic"]) else np.nan,
                 "adf_pvalue_c": float(arow["pvalue"]) if pd.notna(arow["pvalue"]) else np.nan,
             }
@@ -1175,7 +1185,7 @@ def build_handoff_package() -> dict[str, object]:
     ar1_df.to_csv(paths["tables"] / "ar1_results.csv", index=False)
     adf_df.to_csv(paths["tables"] / "adf_results.csv", index=False)
 
-    period_comp = _sample_period_comparison(descriptive, normality, tails, acf_df, adf_df)
+    period_comp = _sample_period_comparison(proc_ext, descriptive, normality, tails, adf_df)
     period_comp.to_csv(paths["tables"] / "sample_period_comparison.csv", index=False)
 
     assumptions = _assumption_matrix(

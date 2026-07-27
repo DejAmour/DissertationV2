@@ -6,7 +6,7 @@ This handover adds a historical empirical diagnostics component alongside existi
 ## 2) Data provenance and validation
 - Source URL: https://raw.githubusercontent.com/datasets/oil-prices/main/data/brent-daily.csv
 - Retrieval date: 2026-07-27
-- Raw filename: DCOILBRENTEU_fred_2.csv
+- Raw filename: DCOILBRENTEU_fred_3.csv
 - Units: USD/barrel
 - Frequency: Daily
 - First/last observation in raw: 1987-05-20 to 2026-07-20
@@ -25,8 +25,8 @@ with annualisation factor \(\sqrt{252}\) for volatility. No trimming or winsoris
 
 ## 4) Descriptive statistics by required period
 - **full_sample** (2000-01-04 to 2025-12-31): n_prices=6599, n_returns=6598, mean=0.000143, std=0.026026, annualized vol=0.4132, skew=-1.9363, excess kurtosis=76.3718.
-- **pre-pandemic comparison** (2010-01-04 to 2019-12-31): n_prices=2530, n_returns=2530, mean=-0.000055, std=0.019098, annualized vol=0.3032, skew=0.1933, excess kurtosis=2.7695.
-- **COVID-19 stress period** (2020-02-03 to 2020-06-30): n_prices=103, n_returns=103, mean=-0.003179, std=0.110517, annualized vol=1.7544, skew=-1.4733, excess kurtosis=12.6129.
+- **pre-pandemic comparison** (2010-01-04 to 2019-12-31): n_prices=2530, n_returns=2529, mean=-0.000061, std=0.019100, annualized vol=0.3032, skew=0.1941, excess kurtosis=2.7699.
+- **COVID-19 stress period** (2020-02-03 to 2020-06-30): n_prices=103, n_returns=102, mean=-0.002548, std=0.110876, annualized vol=1.7601, skew=-1.4892, excess kurtosis=12.6058.
 
 ## 5) Normality and tails
 - Jarque-Bera and fitted normal parameters are reported in `tables/normality_tests.csv`.
