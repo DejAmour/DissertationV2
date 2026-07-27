@@ -1,0 +1,8 @@
+[ok] download_data: completed
+[ok] prepare_data: completed
+[ok] estimate_gbm: completed
+[ok] simulate_gbm: completed
+[ok] evaluate_gbm: completed
+
+Limitations:
+- Required full-sample coverage 2000-01-01 to 2025-12-31 not satisfied by processed data.

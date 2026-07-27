@@ -1,0 +1,7 @@
+metric,value
+MAE,9.023262590029372
+RMSE,10.319288073690892
+MAPE_pct,13.644789070221366
+coverage_p05_p95,1.0
+avg_interval_width,74.04444587674644
+directional_accuracy,0.4779116465863454

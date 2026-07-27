@@ -1,0 +1,2 @@
+series,intercept,phi,intercept_se,phi_se,intercept_t,phi_t,intercept_p,phi_p,nobs,r_squared,half_life_days,half_life_note
+log_price,0.0072864782828340035,0.9982553087620998,0.0027487826071769823,0.0006667371949996057,2.650801945490067,1497.2245680139235,0.008049273765320037,0.0,6598,0.9970661983351012,396.9426369724508,"Reported because AR(1) coefficient is within (0,1) and statistically significant."
