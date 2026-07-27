@@ -1,0 +1,2 @@
+training_start,training_end,test_start,test_end,n_training_prices,n_training_returns,n_test_prices,S0,mean_daily_log_return_training,std_daily_log_return_training,mu_annual_training,sigma_annual_training,annualisation_factor
+2000-01-04,2025-01-02,2025-01-03,2025-12-31,6347,6346,252,76.14,0.00018225739475219484,0.026258553168649855,0.13280732690591535,0.4168416088356877,252

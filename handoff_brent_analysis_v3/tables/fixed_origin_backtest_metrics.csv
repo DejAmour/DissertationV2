@@ -1,0 +1,8 @@
+metric_name,value
+MAE,9.392180490548176
+RMSE,10.748620916406857
+MAPE_pct,14.204976597116373
+coverage_90,1.0
+avg_interval_width,75.22448153688134
+lower_tail_violation_freq,0.0
+upper_tail_violation_freq,0.0

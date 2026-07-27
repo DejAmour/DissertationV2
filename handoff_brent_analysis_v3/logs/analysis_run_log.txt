@@ -1,0 +1,6 @@
+[ok] prepare_data: completed
+[ok] estimate_gbm: completed
+[ok] evaluate_gbm: completed
+[ok] rolling_origin_backtest: completed
+[ok] window_validation: first processed observation 2000-01-04, first valid in requested window 2000-01-04, last processed observation 2025-12-31.
+[ok] rolling_origin_overlap_note: horizons 5 and 20 use overlapping target windows; see /home/runner/work/DissertationV2/DissertationV2/brent_gbm_analysis/outputs/tables/rolling_origin_metrics_by_horizon.csv.
