@@ -1,0 +1,2 @@
+source_url,retrieval_date,raw_filename,units,frequency,first_observation,last_observation,missing_values,non_numeric_values,duplicate_dates,non_positive_values,chronological_order
+https://raw.githubusercontent.com/datasets/oil-prices/main/data/brent-daily.csv,2026-07-27,DCOILBRENTEU_fred_2.csv,USD/barrel,Daily,1987-05-20,2026-07-20,0,0,0,0,True

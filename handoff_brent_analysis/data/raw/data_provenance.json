@@ -1,0 +1,11 @@
+{
+  "original_source": "US EIA Europe Brent Spot Price FOB via github.com/datasets/oil-prices (fallback when FRED unavailable)",
+  "download_url": "https://raw.githubusercontent.com/datasets/oil-prices/main/data/brent-daily.csv",
+  "preferred_download_url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DCOILBRENTEU&cosd=2000-01-01&coed=2025-12-31",
+  "fallback_download_url": "https://raw.githubusercontent.com/datasets/oil-prices/main/data/brent-daily.csv",
+  "series_name": "DCOILBRENTEU",
+  "retrieval_date": "2026-07-27",
+  "raw_csv_filename": "DCOILBRENTEU_fred_2.csv",
+  "download_warning": "FRED download failed; fallback used. Error: HTTPSConnectionPool(host='fred.stlouisfed.org', port=443): Max retries exceeded with url: /graph/fredgraph.csv?id=DCOILBRENTEU&cosd=2000-01-01&coed=2025-12-31 (Caused by NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7f3f605efc80>: Failed to resolve 'fred.stlouisfed.org' ([Errno -5] No address associated with hostname)\"))",
+  "source_note": "FRED series DCOILBRENTEU republishes underlying EIA data."
+}

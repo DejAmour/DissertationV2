@@ -9,7 +9,7 @@ Use the repository root README for full setup instructions.
 
 ## Stage 1 — Data retrieval and validation
 
-Downloads and cleans daily Brent spot prices from FRED. If FRED is unavailable in the runtime environment, the downloader falls back to the public `datasets/oil-prices` mirror (underlying EIA series) and records provenance.
+Downloads and cleans daily Brent spot prices from FRED.
 
 ```bash
 cd brent_gbm_analysis
@@ -202,20 +202,3 @@ below 90 % indicates the interval is too narrow.
 | `outputs/tables/backtest_metrics.csv` | MAE, RMSE, MAPE, coverage, avg interval width, directional accuracy |
 | `outputs/figures/backtest_forecast_vs_actual.png` | Actual price path vs GBM p50 median and p05–p95 band |
 | `outputs/figures/backtest_error_distribution.png` | Histogram of forecast errors (actual − p50) |
-
----
-
-## Handover package build (historical diagnostics + methodological audit)
-
-Builds a standalone handoff package under repository root:
-
-```bash
-cd brent_gbm_analysis
-python src/historical_diagnostics.py
-pytest tests/test_handover_package.py -q
-```
-
-Artifacts are written to:
-
-- `../handoff_brent_analysis/`
-- `../brent_gbm_handover.zip`
