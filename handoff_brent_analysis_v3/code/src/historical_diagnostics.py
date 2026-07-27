@@ -24,11 +24,18 @@ from statsmodels.regression.linear_model import OLS
 from statsmodels.stats.diagnostic import acorr_ljungbox
 from statsmodels.tsa.stattools import acf, adfuller
 
-from download_data import DOWNLOAD_URL, SOURCE_DESCRIPTION
-from estimate_gbm import estimate_gbm
-from evaluate_gbm import evaluate_gbm
-from prepare_data import prepare_data
-from rolling_origin_backtest import run_rolling_origin_backtest
+try:
+    from download_data import DOWNLOAD_URL, SOURCE_DESCRIPTION
+    from estimate_gbm import estimate_gbm
+    from evaluate_gbm import evaluate_gbm
+    from prepare_data import prepare_data
+    from rolling_origin_backtest import run_rolling_origin_backtest
+except ModuleNotFoundError:  # pragma: no cover - import path varies between script and package usage
+    from src.download_data import DOWNLOAD_URL, SOURCE_DESCRIPTION
+    from src.estimate_gbm import estimate_gbm
+    from src.evaluate_gbm import evaluate_gbm
+    from src.prepare_data import prepare_data
+    from src.rolling_origin_backtest import run_rolling_origin_backtest
 
 ANNUALISATION_FACTOR = 252
 HANDOFF_DIRNAME = "handoff_brent_analysis_v3"
