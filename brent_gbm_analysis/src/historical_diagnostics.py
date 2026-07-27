@@ -1136,14 +1136,16 @@ def build_handoff_package() -> dict[str, object]:
     # Validate sample window: the requested window begins 2000-01-01.
     # No requirement for a price observation on 2000-01-01 itself (weekend/holiday).
     # The first available processed observation is the first valid trading day
-    # within the requested window.
+    # within the requested window (within a few calendar days to allow for weekends
+    # and public holidays at the start of the year).
     first_proc_date = proc_ext["Date"].min()
     last_proc_date = proc_ext["Date"].max()
     requested_start = pd.Timestamp("2000-01-01")
     requested_end = pd.Timestamp("2025-12-31")
-    # The first processed observation must fall within the requested window.
+    # Allow up to 7 calendar days after the nominal start to account for weekends/holidays.
     window_ok = (
         first_proc_date >= requested_start
+        and first_proc_date <= requested_start + pd.Timedelta(days=7)
         and last_proc_date >= requested_end
     )
     if not window_ok:

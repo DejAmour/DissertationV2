@@ -39,6 +39,7 @@ figures/backtest_error_distribution.png – histogram of (actual - p50) errors
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import matplotlib
@@ -508,6 +509,17 @@ def evaluate_gbm(
     figures_dir.mkdir(parents=True, exist_ok=True)
     tables_dir.mkdir(parents=True, exist_ok=True)
 
+    # params_csv is no longer used (parameters are estimated from training data
+    # only to prevent look-ahead bias).  Emit a warning if a caller supplies it.
+    if params_csv is not None:
+        warnings.warn(
+            "The `params_csv` argument is deprecated and has no effect. "
+            "GBM parameters (mu, sigma) are now estimated from training data only "
+            "to prevent look-ahead bias.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     # -- Load price history ---------------------------------------------------
     prices_df = load_price_history(cleaned_csv)
 
@@ -515,9 +527,12 @@ def evaluate_gbm(
     train_df, test_df = split_train_test(prices_df, test_window=test_window)
 
     # Explicit look-ahead guard: verify temporal ordering
-    assert pd.to_datetime(train_df["Date"].iloc[-1]) < pd.to_datetime(test_df["Date"].iloc[0]), (
-        "Look-ahead detected: last training date is not strictly before first test date."
-    )
+    if pd.to_datetime(train_df["Date"].iloc[-1]) >= pd.to_datetime(test_df["Date"].iloc[0]):
+        raise ValueError(
+            "Look-ahead detected: last training date is not strictly before first test date. "
+            f"Last train: {train_df['Date'].iloc[-1]}, "
+            f"First test: {test_df['Date'].iloc[0]}."
+        )
 
     # -- Estimate mu/sigma from TRAINING DATA ONLY ----------------------------
     train_params = estimate_params_from_training(train_df)
