@@ -357,15 +357,17 @@ def _ar1_and_adf_tables(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
                 "nobs": int(model.nobs),
                 "r_squared": float(model.rsquared),
                 "half_life_days": float(np.nan),
-                "half_life_note": "Not interpreted as evidence unless mean-reverting (|phi|<1 and statistically supported).",
+                "half_life_note": (
+                    "Half-life not interpreted: ADF tests do not robustly reject "
+                    "the unit root for this series. A statistically significant "
+                    "phi (OLS t-test vs 0) is not evidence of mean reversion; "
+                    "only ADF-based inference on phi<1 is valid for this purpose. "
+                    "Failure to reject the unit-root null is not proof that the "
+                    "unit root exists; structural breaks can reduce ADF reliability."
+                ),
             }
         ]
     )
-
-    if abs(phi) < 1 and phi_p < 0.05 and 0 < phi < 1:
-        half_life = -math.log(2) / math.log(phi)
-        ar1_df.loc[0, "half_life_days"] = float(half_life)
-        ar1_df.loc[0, "half_life_note"] = "Reported because AR(1) coefficient is within (0,1) and statistically significant."
 
     adf_rows: list[dict[str, object]] = []
     for period_label, start, end in PERIODS:
@@ -525,9 +527,18 @@ def _assumption_matrix(
             "assumption": "Absence of mean reversion",
             "diagnostic_used": "AR(1) on log prices + ADF(c)",
             "numerical_result": f"phi={phi:.6f} (p={phi_p:.4g}); ADF p={adf_c_full['pvalue']:.4g}",
-            "interpretation": "If unit-root null not rejected, persistent/random-walk behavior remains plausible.",
-            "assessment": "supported" if adf_c_full["pvalue"] > 0.05 else "partially supported",
-            "qualification": "Do not interpret half-life unless statistically defensible.",
+            "interpretation": (
+                "ADF does not robustly reject the unit-root null at 5%. "
+                "Failure to reject the unit-root null is not proof that the unit root exists. "
+                "ADF reliability can be reduced by structural breaks. "
+                "The OLS t-test for phi!=0 is not valid evidence of mean reversion; "
+                "only ADF-based inference on phi<1 is appropriate for this purpose."
+            ),
+            "assessment": "inconclusive/not contradicted at 5%",
+            "qualification": (
+                "Half-life is not reported because ADF tests do not robustly reject the "
+                "unit root. Persistent/random-walk behavior remains plausible."
+            ),
         },
         {
             "assumption": "Strictly positive prices",
@@ -938,7 +949,10 @@ with annualisation factor \(\sqrt{{252}}\) for volatility. No trimming or winsor
 ## 7) Mean reversion and unit root diagnostics
 - AR(1) on log prices is reported in `tables/ar1_results.csv`.
 - ADF tests with `regression='c'` and `regression='ct'` and `autolag='AIC'` are in `tables/adf_results.csv`.
-- Half-life is only reported when statistically defensible.
+- Half-life is **not reported**: ADF tests do not robustly reject the unit-root null for this series.
+- A statistically significant OLS phi coefficient (t-test vs 0) is **not** evidence of mean reversion; only ADF-based inference on phi<1 is valid for this purpose.
+- Failure to reject the unit-root null is not proof that the unit root exists; structural breaks can reduce ADF reliability.
+- Both ADF specifications (regression='c' and regression='ct') are retained with their critical values.
 
 ## 8) Sample-period comparison
 `tables/sample_period_comparison.csv` and `figures/sample_period_comparison.png` compare the required periods.
@@ -1119,13 +1133,26 @@ def build_handoff_package() -> dict[str, object]:
     proc_ext = _build_processed_with_logs(processed)
     proc_ext.to_csv(paths["processed"] / "brent_prices_2000_2025_with_log_features.csv", index=False)
 
-    required_coverage_ok = (
-        proc_ext["Date"].min() <= pd.Timestamp("2000-01-01")
-        and proc_ext["Date"].max() >= pd.Timestamp("2025-12-31")
+    # Validate sample window: the requested window begins 2000-01-01.
+    # No requirement for a price observation on 2000-01-01 itself (weekend/holiday).
+    # The first available processed observation is the first valid trading day
+    # within the requested window.
+    first_proc_date = proc_ext["Date"].min()
+    last_proc_date = proc_ext["Date"].max()
+    requested_start = pd.Timestamp("2000-01-01")
+    requested_end = pd.Timestamp("2025-12-31")
+    # The first processed observation must fall within the requested window.
+    window_ok = (
+        first_proc_date >= requested_start
+        and last_proc_date >= requested_end
     )
-    if not required_coverage_ok:
+    if not window_ok:
         limitations.append(
-            "Required full-sample coverage 2000-01-01 to 2025-12-31 not satisfied by processed data."
+            f"The requested sample window begins on 1 January 2000. "
+            f"The first available reported price observation within that window occurs on "
+            f"{first_proc_date.date().isoformat()}. "
+            f"Last processed observation: {last_proc_date.date().isoformat()}. "
+            f"Required end date 2025-12-31 not satisfied."
         )
 
     data_validation = pd.DataFrame(

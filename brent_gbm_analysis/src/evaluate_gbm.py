@@ -16,8 +16,17 @@ Train / test split
 ------------------
 The last ``test_window`` trading days of the cleaned price history form the
 hold-out test set.  ``S_0`` is set to the final training price.  ``mu`` and
-``sigma`` are taken from the Stage 2 estimates (estimated on the full sample);
-this is documented as an assumption and is noted in the printed summary.
+``sigma`` are estimated **from training log returns only** (i.e. the returns
+computed from the training price series) so that no test-period information
+leaks into the forecast parameters.  This ensures a look-ahead-free backtest.
+
+Look-ahead prevention
+---------------------
+* The price series is split **before** any estimation.
+* Log returns are computed **from training prices only**.
+* ``mu`` and ``sigma`` are fitted on training returns only.
+* ``S0`` is the final training price.
+* Test prices are never accessed before the forecast comparison step.
 
 Outputs
 -------
@@ -152,6 +161,53 @@ def split_train_test(
     train_df = df.iloc[:-test_window].reset_index(drop=True)
     test_df = df.iloc[-test_window:].reset_index(drop=True)
     return train_df, test_df
+
+
+# ---------------------------------------------------------------------------
+# Training-data parameter estimation (no look-ahead)
+# ---------------------------------------------------------------------------
+
+def estimate_params_from_training(
+    train_df: pd.DataFrame,
+) -> dict[str, float]:
+    """Estimate GBM mu and sigma from training prices only.
+
+    This function is the look-ahead-free replacement for loading Stage 2
+    parameters: it computes log returns from training prices and estimates
+    mu/sigma entirely within the training window.
+
+    Parameters
+    ----------
+    train_df:
+        Training price DataFrame with column ``Price_USD_per_barrel``.
+
+    Returns
+    -------
+    Dictionary with keys ``mu_annual``, ``sigma_annual``,
+    ``n_returns``, ``mean_daily``, ``std_daily``.
+
+    Notes
+    -----
+    ``mu_annual = mean_daily * T + 0.5 * sigma_annual^2`` (Ito correction)
+    where T = 252 (trading days per year).
+    """
+    prices = train_df["Price_USD_per_barrel"].astype(float)
+    log_returns = np.log(prices / prices.shift(1)).dropna()
+    n = len(log_returns)
+    if n == 0:
+        raise ValueError("No valid log returns in training data.")
+    mean_r = float(log_returns.mean())
+    std_r = float(log_returns.std(ddof=1))
+    T = TRADING_DAYS_PER_YEAR
+    sigma_annual = std_r * np.sqrt(T)
+    mu_annual = mean_r * T + 0.5 * sigma_annual ** 2
+    return {
+        "mu_annual": mu_annual,
+        "sigma_annual": sigma_annual,
+        "n_returns": n,
+        "mean_daily": mean_r,
+        "std_daily": std_r,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +478,8 @@ def evaluate_gbm(
     cleaned_csv:
         Optional override path to the Stage 1 cleaned price CSV.
     params_csv:
-        Optional override path to the Stage 2 GBM parameters CSV.
+        Unused; kept for API compatibility.  ``mu`` and ``sigma`` are always
+        estimated from training data only to prevent look-ahead bias.
     test_window:
         Number of trading days to hold out as the out-of-sample test set
         (default: 252).
@@ -431,15 +488,17 @@ def evaluate_gbm(
 
     Notes
     -----
-    ``mu`` and ``sigma`` are the Stage 2 estimates computed from the full
-    price history.  Using full-sample parameters is a common simplifying
-    assumption for backtesting GBM; it slightly overfits the drift and
-    volatility but is standard practice in the dissertation context.
+    The price series is split **before** any estimation.  Log returns are
+    computed from training prices only.  ``mu`` and ``sigma`` are estimated
+    exclusively on training returns (no test-period information is used).
+    ``S0`` is the final training price.  This ensures a look-ahead-free
+    backtest.
 
     Returns
     -------
     Dictionary with keys: ``S0``, ``mu``, ``sigma``, ``train_size``,
-    ``test_size``, ``comparison_df``, ``metrics_df``,
+    ``test_size``, ``training_start``, ``training_end``, ``test_start``,
+    ``test_end``, ``training_n_returns``, ``comparison_df``, ``metrics_df``,
     ``comparison_csv_path``, ``metrics_csv_path``,
     ``forecast_vs_actual_path``, ``error_distribution_path``.
     """
@@ -449,17 +508,29 @@ def evaluate_gbm(
     figures_dir.mkdir(parents=True, exist_ok=True)
     tables_dir.mkdir(parents=True, exist_ok=True)
 
-    # -- Load inputs ----------------------------------------------------------
+    # -- Load price history ---------------------------------------------------
     prices_df = load_price_history(cleaned_csv)
-    gbm_params = load_gbm_parameters(params_csv)
-    mu = gbm_params["mu_annual"]
-    sigma = gbm_params["sigma_annual"]
 
-    # -- Train / test split ---------------------------------------------------
+    # -- Train / test split BEFORE any estimation (no look-ahead) -------------
     train_df, test_df = split_train_test(prices_df, test_window=test_window)
+
+    # Explicit look-ahead guard: verify temporal ordering
+    assert pd.to_datetime(train_df["Date"].iloc[-1]) < pd.to_datetime(test_df["Date"].iloc[0]), (
+        "Look-ahead detected: last training date is not strictly before first test date."
+    )
+
+    # -- Estimate mu/sigma from TRAINING DATA ONLY ----------------------------
+    train_params = estimate_params_from_training(train_df)
+    mu = train_params["mu_annual"]
+    sigma = train_params["sigma_annual"]
 
     S0 = float(train_df["Price_USD_per_barrel"].iloc[-1])
     horizon_days = len(test_df)
+
+    training_start = train_df["Date"].iloc[0]
+    training_end = train_df["Date"].iloc[-1]
+    test_start = test_df["Date"].iloc[0]
+    test_end = test_df["Date"].iloc[-1]
 
     # -- Analytical GBM forecast quantiles ------------------------------------
     forecast_df = compute_forecast_quantiles(
@@ -506,14 +577,15 @@ def evaluate_gbm(
     print(f"  Total observations   : {len(prices_df)}")
     print(f"  Training observations: {len(train_df)}")
     print(f"  Test window          : {horizon_days} trading days")
-    print(f"  Train period         : {train_df['Date'].iloc[0].date()} "
-          f"to {train_df['Date'].iloc[-1].date()}")
-    print(f"  Test period          : {test_df['Date'].iloc[0].date()} "
-          f"to {test_df['Date'].iloc[-1].date()}")
+    print(f"  Train period         : {training_start.date()} "
+          f"to {training_end.date()}")
+    print(f"  Test period          : {test_start.date()} "
+          f"to {test_end.date()}")
+    print(f"  Training log returns : {train_params['n_returns']}")
     print(f"  S0 (forecast origin) : {S0:.4f} USD/barrel")
-    print(f"  mu_annual            : {mu:.6f}  ({mu * 100:.2f} %)")
-    print(f"  sigma_annual         : {sigma:.6f}  ({sigma * 100:.2f} %)")
-    print(f"  NOTE: mu/sigma estimated from full sample (Stage 2 assumption).")
+    print(f"  mu_annual (train)    : {mu:.6f}  ({mu * 100:.2f} %)")
+    print(f"  sigma_annual (train) : {sigma:.6f}  ({sigma * 100:.2f} %)")
+    print(f"  NOTE: mu/sigma estimated from training data only (no look-ahead).")
     print()
     print("--- Key evaluation metrics ---")
     print(f"  MAE                  : {metrics_map.get('MAE', float('nan')):.4f}")
@@ -534,6 +606,11 @@ def evaluate_gbm(
         "sigma": sigma,
         "train_size": len(train_df),
         "test_size": horizon_days,
+        "training_start": training_start,
+        "training_end": training_end,
+        "test_start": test_start,
+        "test_end": test_end,
+        "training_n_returns": train_params["n_returns"],
         "comparison_df": comparison_df,
         "metrics_df": metrics_df,
         "comparison_csv_path": comparison_csv_path,

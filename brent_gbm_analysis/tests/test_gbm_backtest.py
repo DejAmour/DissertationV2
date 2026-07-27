@@ -373,3 +373,71 @@ def test_reproducibility_analytical_quantiles() -> None:
     df2 = compute_forecast_quantiles(S0=75.0, mu=0.12, sigma=0.40, horizon_days=50,
                                      quantiles=[0.05, 0.50, 0.95])
     pd.testing.assert_frame_equal(df1, df2)
+
+
+# ---------------------------------------------------------------------------
+# No-look-ahead tests
+# ---------------------------------------------------------------------------
+
+def test_estimate_params_from_training_uses_training_only() -> None:
+    """estimate_params_from_training must not use any test-period prices."""
+    from src.evaluate_gbm import estimate_params_from_training, split_train_test  # noqa: PLC0415
+
+    n = 300
+    # Training prices are flat at 80; test prices jump to 200 (extreme, detectable).
+    prices = np.concatenate([np.full(n - 50, 80.0), np.full(50, 200.0)])
+    df = pd.DataFrame({
+        "Date": pd.date_range("2020-01-01", periods=n),
+        "Price_USD_per_barrel": prices,
+    })
+    train, test = split_train_test(df, test_window=50)
+
+    # Verify split is correct: all training prices should be 80
+    assert (train["Price_USD_per_barrel"] == 80.0).all(), (
+        "Training set unexpectedly contains test-period prices."
+    )
+    # Estimate from training only
+    params = estimate_params_from_training(train)
+    # Training log returns are all 0 (flat 80→80), so std_daily ≈ 0
+    # sigma_annual should be ~0 and mu should be ~0
+    assert abs(params["std_daily"]) < 1e-10, (
+        "Training sigma should reflect training data only (flat prices → zero std)."
+    )
+
+
+def test_no_look_ahead_train_before_test() -> None:
+    """max(train_date) must be strictly before min(test_date)."""
+    from src.evaluate_gbm import split_train_test  # noqa: PLC0415
+
+    n = 500
+    df = pd.DataFrame({
+        "Date": pd.date_range("2019-01-01", periods=n),
+        "Price_USD_per_barrel": np.random.default_rng(42).uniform(50, 100, n),
+    })
+    train, test = split_train_test(df, test_window=252)
+    max_train_date = pd.to_datetime(train["Date"].max())
+    min_test_date = pd.to_datetime(test["Date"].min())
+    assert max_train_date < min_test_date, (
+        f"Look-ahead violation: max train date {max_train_date} >= "
+        f"min test date {min_test_date}."
+    )
+
+
+def test_estimate_params_from_training_schema() -> None:
+    """estimate_params_from_training must return mu_annual and sigma_annual."""
+    from src.evaluate_gbm import estimate_params_from_training  # noqa: PLC0415
+
+    n = 100
+    prices = np.cumprod(np.exp(np.random.default_rng(7).normal(0, 0.01, n))) * 75.0
+    df = pd.DataFrame({
+        "Date": pd.date_range("2020-01-01", periods=n),
+        "Price_USD_per_barrel": prices,
+    })
+    params = estimate_params_from_training(df)
+    assert "mu_annual" in params, "Missing key: mu_annual"
+    assert "sigma_annual" in params, "Missing key: sigma_annual"
+    assert "n_returns" in params, "Missing key: n_returns"
+    assert params["n_returns"] == n - 1, (
+        f"Expected {n - 1} log returns, got {params['n_returns']}."
+    )
+    assert params["sigma_annual"] > 0, "sigma_annual must be positive."
