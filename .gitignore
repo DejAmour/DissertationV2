@@ -1,5 +1,6 @@
 # Generated data and outputs
 brent_gbm_analysis/data/raw/*.csv
+!brent_gbm_analysis/data/raw/DCOILBRENTEU_fred.csv
 brent_gbm_analysis/data/raw/data_provenance.json
 brent_gbm_analysis/data/processed/*.csv
 brent_gbm_analysis/outputs/figures/*.png

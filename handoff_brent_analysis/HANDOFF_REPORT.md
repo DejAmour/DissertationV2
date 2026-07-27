@@ -6,7 +6,7 @@ This handover adds a historical empirical diagnostics component alongside existi
 ## 2) Data provenance and validation
 - Source URL: https://raw.githubusercontent.com/datasets/oil-prices/main/data/brent-daily.csv
 - Retrieval date: 2026-07-27
-- Raw filename: DCOILBRENTEU_fred_3.csv
+- Raw filename: DCOILBRENTEU_fred.csv
 - Units: USD/barrel
 - Frequency: Daily
 - First/last observation in raw: 1987-05-20 to 2026-07-20
