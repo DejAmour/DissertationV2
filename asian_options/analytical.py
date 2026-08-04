@@ -51,11 +51,42 @@ def black_scholes_call(cfg: ModelConfig) -> float:
 
 def geometric_asian_call_price(cfg: ModelConfig) -> float:
     """
-    Closed-form price for a discrete geometric Asian call option.
+    Closed-form price for a discretely monitored geometric Asian call option.
 
-    Under risk-neutral GBM the geometric average is log-normally distributed,
-    which admits an exact Black-Scholes-type formula.  The derivation adjusts
-    the drift and volatility to account for the averaging.
+    Under risk-neutral GBM with continuous dividend yield ``q``, the geometric
+    average of m equally-spaced monitoring dates t_j = j*dt (j=1..m) is
+    log-normally distributed.  The closed-form price is a Black-Scholes-type
+    formula on the adjusted parameters.
+
+    Derivation
+    ----------
+    Let G = (S_{t_1} * ... * S_{t_m})^{1/m}.  Under Q::
+
+        log G = (1/m) * sum_{j=1}^{m} log S_{t_j}
+              = log(S0) + (1/m) * sum_{j=1}^{m} [mu_adj * j*dt + sigma * B_{j*dt}]
+
+    where ``mu_adj = r - q - 0.5*sigma^2``.
+
+    The sum of j*dt for j=1..m is dt * m*(m+1)/2, so:
+
+        E[log G] = log(S0) + mu_adj * dt * (m+1)/2
+        Var[log G] = sigma^2 * dt * (m+1)*(2m+1) / (6m)
+
+    Define::
+
+        mu_G  = log(S0) + (r - q - 0.5*sigma^2) * T * (m+1)/(2m)
+        sigma_G = sigma * sqrt(T * (m+1)*(2m+1) / (6*m^2))
+
+    The price is then (Kemna & Vorst, 1990 style)::
+
+        d1 = (mu_G - log(K) + sigma_G^2) / sigma_G
+        d2 = d1 - sigma_G
+        C  = exp(-r*T) * (exp(mu_G + 0.5*sigma_G^2) * N(d1) - K * N(d2))
+
+    References
+    ----------
+    Kemna, A. G. Z. & Vorst, A. C. F. (1990).  "A Pricing Method for Options
+    Based on Average Asset Values."  Journal of Banking & Finance, 14(1), 113–129.
 
     Parameters
     ----------
@@ -65,16 +96,40 @@ def geometric_asian_call_price(cfg: ModelConfig) -> float:
     Returns
     -------
     float
-        Analytical price of the geometric Asian call.
-
-    Raises
-    ------
-    NotImplementedError
-        Stage 3 will implement the closed-form formula.
+        Analytical price of the discretely monitored geometric Asian call.
     """
-    raise NotImplementedError(
-        "Analytical geometric Asian price will be implemented in Stage 3."
+    from math import log, exp, sqrt
+    from scipy.stats import norm  # type: ignore[import]
+
+    m = cfg.m
+    dt = cfg.dt
+    sigma = cfg.sigma
+    r = cfg.r
+    q = cfg.q
+    S0 = cfg.S0
+    K = cfg.K
+    T = cfg.T
+
+    # Adjusted drift for log(G)
+    mu_G = log(S0) + (r - q - 0.5 * sigma ** 2) * T * (m + 1) / (2 * m)
+
+    # Variance of log(G)
+    var_G = sigma ** 2 * T * (m + 1) * (2 * m + 1) / (6 * m ** 2)
+    sigma_G = sqrt(var_G)
+
+    if sigma_G == 0.0:
+        # Degenerate: G is deterministic
+        G_val = exp(mu_G)
+        return exp(-r * T) * max(G_val - K, 0.0)
+
+    d1 = (mu_G - log(K) + sigma_G ** 2) / sigma_G
+    d2 = d1 - sigma_G
+
+    price = exp(-r * T) * (
+        exp(mu_G + 0.5 * sigma_G ** 2) * norm.cdf(d1)
+        - K * norm.cdf(d2)
     )
+    return float(price)
 
 
 def relu_expected_value(mu: float, sigma: float) -> float:
