@@ -17,3 +17,7 @@ __pycache__/
 
 # OS
 .DS_Store
+
+handover_evidence/
+Activate.ps1
+
