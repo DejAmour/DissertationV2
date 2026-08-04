@@ -3,7 +3,23 @@ variance_reduction.py
 =====================
 Classical variance-reduction utilities (antithetic variates, control variates).
 
-Stage 1 placeholder: helper interfaces defined; implementations deferred to Stage 4.
+Stage 4 implements:
+- ``estimate_beta``: OLS control-variate coefficient from a pilot sample.
+- ``apply_control_variate``: corrected observation Y = X - beta*(G - E[G]).
+
+Control-variate formula
+-----------------------
+Given arithmetic Asian payoffs X and geometric Asian payoffs G on the same
+paths, with known analytical expectation E[G], the CV-corrected observation is:
+
+    Y = X - beta * (G - E[G])
+
+The optimal beta minimises Var(Y):
+
+    beta* = Cov(X, G) / Var(G)
+
+When Var(G) == 0 (degenerate control, e.g. zero-vol or deep ITM/OTM corner),
+``estimate_beta`` returns 0.0 so that Y = X (fallback to plain MC).
 """
 
 from __future__ import annotations
@@ -18,7 +34,12 @@ def estimate_beta(
     """
     Estimate the control-variate coefficient beta via OLS on a pilot sample.
 
-    beta = Cov(X, G) / Var(G)
+    .. math::
+
+        \\hat{\\beta} = \\frac{\\mathrm{Cov}(X, G)}{\\mathrm{Var}(G)}
+
+    When ``Var(G) == 0`` (degenerate control), returns ``0.0`` so that the
+    corrected observations fall back to the plain arithmetic payoffs.
 
     Parameters
     ----------
@@ -30,14 +51,30 @@ def estimate_beta(
     Returns
     -------
     float
-        Estimated coefficient beta.
+        Estimated coefficient beta (0.0 when Var(G) is zero).
 
     Raises
     ------
-    NotImplementedError
-        Stage 4 will implement this function.
+    ValueError
+        If the arrays have different lengths or fewer than 2 elements.
     """
-    raise NotImplementedError("Beta estimation will be implemented in Stage 4.")
+    x = np.asarray(payoffs_x, dtype=np.float64).ravel()
+    g = np.asarray(payoffs_g, dtype=np.float64).ravel()
+    if x.shape != g.shape:
+        raise ValueError(
+            f"payoffs_x and payoffs_g must have the same shape, "
+            f"got {x.shape} and {g.shape}"
+        )
+    if len(x) < 2:
+        raise ValueError(
+            f"Need at least 2 observations to estimate beta, got {len(x)}"
+        )
+    var_g = float(np.var(g, ddof=1))
+    if var_g == 0.0:
+        # Degenerate control: G is constant, no variance to exploit.
+        return 0.0
+    cov_xg = float(np.cov(x, g, ddof=1)[0, 1])
+    return cov_xg / var_g
 
 
 def apply_control_variate(
@@ -49,7 +86,9 @@ def apply_control_variate(
     """
     Apply the control-variate correction.
 
-    Y = X - beta * (G - E[G])
+    .. math::
+
+        Y_i = X_i - \\beta \\cdot (G_i - \\mathbb{E}[G])
 
     Parameters
     ----------
@@ -60,7 +99,7 @@ def apply_control_variate(
     beta : float
         Frozen control-variate coefficient (estimated on a separate pilot).
     eg : float
-        Analytical expectation of the geometric Asian payoff.
+        Analytical expectation of the geometric Asian payoff (E[G]).
 
     Returns
     -------
@@ -69,9 +108,14 @@ def apply_control_variate(
 
     Raises
     ------
-    NotImplementedError
-        Stage 4 will implement this function.
+    ValueError
+        If the arrays have different lengths.
     """
-    raise NotImplementedError(
-        "Control-variate correction will be implemented in Stage 4."
-    )
+    x = np.asarray(payoffs_x, dtype=np.float64).ravel()
+    g = np.asarray(payoffs_g, dtype=np.float64).ravel()
+    if x.shape != g.shape:
+        raise ValueError(
+            f"payoffs_x and payoffs_g must have the same shape, "
+            f"got {x.shape} and {g.shape}"
+        )
+    return x - beta * (g - eg)
