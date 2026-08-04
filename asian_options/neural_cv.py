@@ -228,7 +228,7 @@ def analytical_network_expectation(network: _ShallowNet) -> float:
             e_relu[i] = sigma * norm.pdf(t) + mu * norm.cdf(t)
 
     # W2 shape (1, hidden), b2 shape (1,)
-    result = float(W2 @ e_relu + b2[0])
+    result = float(np.dot(np.asarray(W2, dtype=np.float64).reshape(-1), e_relu) + float(np.asarray(b2, dtype=np.float64).reshape(-1)[0]))
     return result
 
 
@@ -286,3 +286,4 @@ def ncv_estimator(network: _ShallowNet, cfg: ModelConfig):
         n_paths=stats["n_paths"],
         runtime_s=stats["runtime_s"],
     )
+
