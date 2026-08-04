@@ -56,6 +56,10 @@ def standard_monte_carlo(cfg: ModelConfig) -> EstimateResult:
     """
     Plain arithmetic Asian call price via Monte Carlo.
 
+    Simulates ``cfg.n_paths`` GBM paths using ``cfg.seed`` for reproducibility,
+    computes the discounted arithmetic Asian call payoff for each path, and
+    returns the standard Monte Carlo estimator summary.
+
     Parameters
     ----------
     cfg : ModelConfig
@@ -65,13 +69,28 @@ def standard_monte_carlo(cfg: ModelConfig) -> EstimateResult:
     -------
     EstimateResult
         Pricing summary statistics.
-
-    Raises
-    ------
-    NotImplementedError
-        Stage 3 will implement this estimator.
     """
-    raise NotImplementedError("Standard MC will be implemented in Stage 3.")
+    import time
+    from asian_options.simulate_gbm import simulate_paths
+    from asian_options.payoffs import arithmetic_asian_call_payoff
+    from asian_options.metrics import summarise_estimates
+
+    t0 = time.perf_counter()
+    paths = simulate_paths(cfg)
+    payoffs = arithmetic_asian_call_payoff(paths, cfg)
+    runtime_s = time.perf_counter() - t0
+
+    stats = summarise_estimates(payoffs, cfg.discount_factor, runtime_s)
+    return EstimateResult(
+        price=stats["price"],
+        variance=stats["variance"],
+        std_dev=stats["std_dev"],
+        std_error=stats["std_error"],
+        ci_lower=stats["ci_lower"],
+        ci_upper=stats["ci_upper"],
+        n_paths=stats["n_paths"],
+        runtime_s=stats["runtime_s"],
+    )
 
 
 def antithetic_variates(cfg: ModelConfig) -> EstimateResult:
