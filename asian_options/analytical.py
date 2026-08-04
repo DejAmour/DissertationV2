@@ -5,11 +5,48 @@ Analytical pricing utilities for Asian options.
 
 Stage 1 placeholder: the closed-form geometric Asian option price and the
 analytical neural-network expectation will be implemented in Stage 3 / Stage 7.
+
+Stage 2 adds: ``black_scholes_call`` — European call benchmark for simulator
+validation.
 """
 
 from __future__ import annotations
 
 from asian_options.config import ModelConfig
+
+
+def black_scholes_call(cfg: ModelConfig) -> float:
+    """
+    Black-Scholes price for a European call option.
+
+    Uses the standard formula::
+
+        d1 = (log(S0/K) + (r - q + 0.5*sigma^2)*T) / (sigma*sqrt(T))
+        d2 = d1 - sigma*sqrt(T)
+        C  = S0*exp(-q*T)*N(d1) - K*exp(-r*T)*N(d2)
+
+    Parameters
+    ----------
+    cfg : ModelConfig
+        Validated model and simulation configuration.
+
+    Returns
+    -------
+    float
+        European call price.
+    """
+    from math import log, exp, sqrt
+    from scipy.stats import norm  # type: ignore[import]
+
+    sqrtT = sqrt(cfg.T)
+    d1 = (
+        log(cfg.S0 / cfg.K) + (cfg.r - cfg.q + 0.5 * cfg.sigma ** 2) * cfg.T
+    ) / (cfg.sigma * sqrtT)
+    d2 = d1 - cfg.sigma * sqrtT
+    return (
+        cfg.S0 * exp(-cfg.q * cfg.T) * norm.cdf(d1)
+        - cfg.K * exp(-cfg.r * cfg.T) * norm.cdf(d2)
+    )
 
 
 def geometric_asian_call_price(cfg: ModelConfig) -> float:
