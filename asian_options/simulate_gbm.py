@@ -50,7 +50,35 @@ def simulate_paths(
 
     Raises
     ------
-    NotImplementedError
-        Stage 2 will replace this placeholder with the full implementation.
+    ValueError
+        If ``shocks`` is supplied with the wrong shape.
+
+    Notes
+    -----
+    Convention: the returned array contains prices at monitoring dates
+    t_1, t_2, ..., t_m only.  The initial spot S0 is **not** included, so
+    the output shape is always ``(n_paths, m)``.
     """
-    raise NotImplementedError("GBM simulation will be implemented in Stage 2.")
+    n, m = cfg.n_paths, cfg.m
+
+    if shocks is not None:
+        Z = np.asarray(shocks, dtype=np.float64)
+        if Z.shape != (n, m):
+            raise ValueError(
+                f"shocks must have shape ({n}, {m}), got {Z.shape}"
+            )
+    else:
+        if rng is None:
+            rng = np.random.default_rng(cfg.seed)
+        Z = rng.standard_normal((n, m))
+
+    dt = cfg.dt
+    drift = (cfg.r - cfg.q - 0.5 * cfg.sigma ** 2) * dt
+    diffusion = cfg.sigma * np.sqrt(dt)
+
+    # Compute log-increments for all steps, then cumsum for log-prices
+    log_increments = drift + diffusion * Z          # shape (n_paths, m)
+    log_paths = np.cumsum(log_increments, axis=1)   # shape (n_paths, m)
+
+    paths: np.ndarray = cfg.S0 * np.exp(log_paths)
+    return paths.astype(np.float64)
