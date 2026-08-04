@@ -81,7 +81,8 @@ def variance_reduction_ratio(
     """
     Variance-reduction ratio VRR = Var(X) / Var(Y).
 
-    A value greater than 1 indicates variance reduction.
+    A value greater than 1 indicates that the reduced estimator has lower
+    variance than the baseline (standard MC).
 
     Parameters
     ----------
@@ -97,40 +98,11 @@ def variance_reduction_ratio(
 
     Raises
     ------
-    NotImplementedError
-        Stage 4 will implement this function.
+    ValueError
+        If ``variance_reduced`` is zero (undefined ratio).
     """
-    raise NotImplementedError(
-        "Variance-reduction ratio will be implemented in Stage 4."
-    )
-
-
-def variance_reduction_ratio(
-    variance_baseline: float,
-    variance_reduced: float,
-) -> float:
-    """
-    Variance-reduction ratio VRR = Var(X) / Var(Y).
-
-    A value greater than 1 indicates variance reduction.
-
-    Parameters
-    ----------
-    variance_baseline : float
-        Observation variance of the baseline estimator (standard MC).
-    variance_reduced : float
-        Observation variance of the reduced estimator.
-
-    Returns
-    -------
-    float
-        VRR.
-
-    Raises
-    ------
-    NotImplementedError
-        Stage 4 will implement this function.
-    """
-    raise NotImplementedError(
-        "Variance-reduction ratio will be implemented in Stage 4."
-    )
+    if variance_reduced == 0.0:
+        raise ValueError(
+            "variance_reduced is zero; VRR is undefined."
+        )
+    return variance_baseline / variance_reduced
