@@ -50,25 +50,35 @@ def print_comparison_table(results: Iterable[dict]) -> None:
     """
     Print a formatted comparison table to stdout.
 
+    Displays budget-accounting fields and variance semantics introduced in
+    Stage 4.  The ``speed_ratio_vs_mc`` column is no longer shown; the
+    variance-reduction ratio (``variance_reduction_ratio``) is displayed
+    instead.
+
     Parameters
     ----------
     results : Iterable[dict]
         Result records with at least the keys: ``method``, ``price``,
-        ``variance``, ``speed_ratio_vs_mc``.
+        ``observation_variance``, ``variance_reduction_ratio``,
+        ``pricing_observations``, ``total_simulated_paths``.
+        Falls back gracefully when optional keys are absent.
     """
     rows = list(results)
     if not rows:
         print("(no results to display)")
         return
 
-    print("\n{:<6} {:>10} {:>14} {:>18}".format(
-        "Method", "Price", "Variance", "SpeedRatioVsMC"
-    ))
-    print("-" * 52)
+    header = "{:<6} {:>10} {:>16} {:>10} {:>14} {:>20}".format(
+        "Method", "Price", "ObsVariance", "PricingObs", "TotalPaths", "VarReductionRatio"
+    )
+    print("\n" + header)
+    print("-" * len(header))
     for row in rows:
-        print("{:<6} {:>10} {:>14} {:>18}".format(
+        print("{:<6} {:>10} {:>16} {:>10} {:>14} {:>20}".format(
             row.get("method", ""),
             row.get("price", ""),
-            row.get("variance", ""),
-            row.get("speed_ratio_vs_mc", ""),
+            row.get("observation_variance", row.get("variance", "")),
+            row.get("pricing_observations", ""),
+            row.get("total_simulated_paths", ""),
+            row.get("variance_reduction_ratio", ""),
         ))
