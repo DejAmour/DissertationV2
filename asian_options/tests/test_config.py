@@ -11,8 +11,12 @@ Tests cover:
 """
 
 import math
+import random
+
+import numpy as np
 import pytest
 from asian_options.config import ModelConfig
+from asian_options.config import collect_environment_metadata, seed_everything
 
 
 # ---------------------------------------------------------------------------
@@ -97,3 +101,33 @@ def test_invalid_input_raises(field: str, value) -> None:
     kwargs = {**VALID_KWARGS, field: value}
     with pytest.raises(ValueError):
         ModelConfig(**kwargs)
+
+
+def test_seed_everything_reseeds_python_and_numpy() -> None:
+    """Resetting the same seed must reproduce Python and NumPy draws."""
+    seed_everything(123)
+    first = (random.random(), np.random.random())
+
+    seed_everything(123)
+    second = (random.random(), np.random.random())
+
+    assert first == second
+
+
+def test_seed_everything_negative_seed_raises() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        seed_everything(-1)
+
+
+def test_collect_environment_metadata_has_stage1_fields() -> None:
+    metadata = collect_environment_metadata()
+    for field in (
+        "platform",
+        "python_version",
+        "numpy_version",
+        "scipy_version",
+        "torch_version",
+        "pytest_version",
+        "torch_deterministic_enabled",
+    ):
+        assert field in metadata

@@ -30,7 +30,7 @@ from typing import Optional
 
 import numpy as np
 
-from asian_options.config import ModelConfig
+from asian_options.config import ModelConfig, seed_everything
 
 
 def _require_torch():
@@ -143,7 +143,7 @@ def train_network(
         Training history with key ``"train_loss"`` (list of per-epoch losses).
     """
     torch = _require_torch()
-    torch.manual_seed(cfg.seed)
+    seed_everything(cfg.seed)
 
     X = torch.tensor(dataset["X_train"], dtype=torch.float64)
     y = torch.tensor(dataset["y_train"], dtype=torch.float64)
@@ -286,4 +286,3 @@ def ncv_estimator(network: _ShallowNet, cfg: ModelConfig):
         n_paths=stats["n_paths"],
         runtime_s=stats["runtime_s"],
     )
-

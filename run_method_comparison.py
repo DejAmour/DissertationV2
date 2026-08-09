@@ -24,7 +24,7 @@ import csv
 import sys
 import traceback
 
-from asian_options.config import ModelConfig
+from asian_options.config import ModelConfig, seed_everything
 from asian_options.estimators import (
     standard_monte_carlo,
     antithetic_variates,
@@ -96,6 +96,7 @@ def _error_row(method: str, error: str) -> dict:
 
 
 def run_comparison():
+    seed_everything(CFG.seed)
     rows = []
 
     # ------------------------------------------------------------------

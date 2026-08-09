@@ -9,7 +9,14 @@ receives an identical, already-validated snapshot of the experiment setup.
 
 from __future__ import annotations
 
+import os
+import platform
+import random
+import sys
 from dataclasses import dataclass, field
+from importlib import import_module
+
+import numpy as np
 
 
 @dataclass
@@ -77,3 +84,124 @@ class ModelConfig:
         """Risk-neutral discount factor e^{-rT}."""
         import math
         return math.exp(-self.r * self.T)
+
+
+def seed_everything(seed: int, deterministic_torch: bool = True) -> dict[str, object]:
+    """
+    Seed Python, NumPy, and PyTorch RNGs for reproducible experiments.
+
+    Parameters
+    ----------
+    seed : int
+        Non-negative integer seed shared across supported RNG backends.
+    deterministic_torch : bool, default=True
+        When PyTorch is available, request deterministic algorithms where
+        practical and disable cuDNN benchmarking.
+
+    Returns
+    -------
+    dict[str, object]
+        Snapshot of the seeding and determinism state that can be persisted for
+        audit purposes.
+    """
+    if seed < 0:
+        raise ValueError(f"seed must be non-negative, got {seed}")
+
+    random.seed(seed)
+    np.random.seed(seed)
+
+    metadata: dict[str, object] = {
+        "seed": seed,
+        "python_random_seeded": True,
+        "numpy_seeded": True,
+        "torch_available": False,
+        "cuda_available": False,
+        "cuda_seeded": False,
+        "torch_deterministic_requested": deterministic_torch,
+        "torch_deterministic_enabled": False,
+        "torch_deterministic_warn_only": False,
+    }
+
+    try:
+        torch = import_module("torch")
+    except ImportError:
+        return metadata
+
+    metadata["torch_available"] = True
+    torch.manual_seed(seed)
+
+    cuda_available = bool(torch.cuda.is_available())
+    metadata["cuda_available"] = cuda_available
+    if cuda_available:
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        metadata["cuda_seeded"] = True
+
+    if deterministic_torch:
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        if hasattr(torch, "use_deterministic_algorithms"):
+            torch.use_deterministic_algorithms(True, warn_only=True)
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+
+    if hasattr(torch, "are_deterministic_algorithms_enabled"):
+        metadata["torch_deterministic_enabled"] = bool(
+            torch.are_deterministic_algorithms_enabled()
+        )
+    else:
+        metadata["torch_deterministic_enabled"] = deterministic_torch
+    if hasattr(torch, "is_deterministic_algorithms_warn_only_enabled"):
+        metadata["torch_deterministic_warn_only"] = bool(
+            torch.is_deterministic_algorithms_warn_only_enabled()
+        )
+
+    return metadata
+
+
+def collect_environment_metadata() -> dict[str, object]:
+    """
+    Collect runtime metadata needed to reproduce Stage 1 Asian-option results.
+
+    Call ``seed_everything()`` first if you want the reported deterministic state
+    to reflect the repository's recommended reproducibility configuration.
+    """
+    metadata: dict[str, object] = {
+        "platform": platform.platform(),
+        "python_version": sys.version.split()[0],
+    }
+
+    for package_name in ("numpy", "scipy", "torch", "pytest"):
+        try:
+            module = import_module(package_name)
+        except ImportError:
+            metadata[f"{package_name}_version"] = "not-installed"
+        else:
+            metadata[f"{package_name}_version"] = getattr(
+                module, "__version__", "unknown"
+            )
+
+    try:
+        torch = import_module("torch")
+    except ImportError:
+        metadata["torch_available"] = False
+        metadata["cuda_available"] = False
+        metadata["torch_deterministic_enabled"] = False
+        metadata["torch_deterministic_warn_only"] = False
+    else:
+        metadata["torch_available"] = True
+        metadata["cuda_available"] = bool(torch.cuda.is_available())
+        if hasattr(torch, "are_deterministic_algorithms_enabled"):
+            metadata["torch_deterministic_enabled"] = bool(
+                torch.are_deterministic_algorithms_enabled()
+            )
+        else:
+            metadata["torch_deterministic_enabled"] = False
+        if hasattr(torch, "is_deterministic_algorithms_warn_only_enabled"):
+            metadata["torch_deterministic_warn_only"] = bool(
+                torch.is_deterministic_algorithms_warn_only_enabled()
+            )
+        else:
+            metadata["torch_deterministic_warn_only"] = False
+
+    return metadata
