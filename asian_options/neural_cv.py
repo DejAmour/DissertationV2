@@ -241,7 +241,7 @@ def analytical_network_expectation(network: _ShallowNet) -> float:
     return result
 
 
-def ncv_estimator(network: _ShallowNet, cfg: ModelConfig):
+def ncv_estimator(network: _ShallowNet, cfg: ModelConfig, n_training_paths: int = 0):
     """
     Neural control-variate price estimator.
 
@@ -257,11 +257,14 @@ def ncv_estimator(network: _ShallowNet, cfg: ModelConfig):
         Frozen network.
     cfg : ModelConfig
         Experiment configuration.
+    n_training_paths : int
+        Number of paths consumed during network training (for budget accounting).
+        Defaults to 0 when not tracked by the caller.
 
     Returns
     -------
     EstimateResult
-        Full pricing summary including variance-reduction ratio and runtimes.
+        Full pricing summary including budget and variance-semantics fields.
     """
     import time
     from asian_options.simulate_gbm import simulate_paths
@@ -290,14 +293,25 @@ def ncv_estimator(network: _ShallowNet, cfg: ModelConfig):
 
     runtime_s = time.perf_counter() - t0
     stats = summarise_estimates(corrected, cfg.discount_factor, runtime_s)
+    n_pricing = stats["n_paths"]
+    obs_var = stats["variance"]
 
     return EstimateResult(
         price=stats["price"],
-        variance=stats["variance"],
+        variance=obs_var,
         std_dev=stats["std_dev"],
         std_error=stats["std_error"],
         ci_lower=stats["ci_lower"],
         ci_upper=stats["ci_upper"],
-        n_paths=stats["n_paths"],
+        n_paths=n_pricing,
         runtime_s=stats["runtime_s"],
+        # Budget fields: NCV uses training paths then independent pricing paths
+        pricing_observations=n_pricing,
+        pricing_simulated_paths=n_pricing,
+        pilot_paths=0,
+        training_paths=n_training_paths,
+        total_simulated_paths=n_training_paths + n_pricing,
+        # Variance fields
+        observation_variance=obs_var,
+        estimator_variance=obs_var / n_pricing,
     )
