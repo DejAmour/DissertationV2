@@ -127,3 +127,74 @@ class TestGeometricAnalyticalProperties:
         # Just verify it returns a reasonable positive value
         price = geometric_asian_call_price(cfg)
         assert price > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: relu_expected_value tests
+# ---------------------------------------------------------------------------
+
+from asian_options.analytical import relu_expected_value
+from scipy.stats import norm as _norm
+import math
+
+
+class TestReluExpectedValue:
+    """Tests for the analytical ReLU expectation E[max(mu + sigma*Y, 0)]."""
+
+    def test_scalar_positive_mu_zero_sigma(self):
+        """sigma=0, mu>0: E[a^+] = mu."""
+        assert relu_expected_value(3.0, 0.0) == pytest.approx(3.0)
+
+    def test_scalar_negative_mu_zero_sigma(self):
+        """sigma=0, mu<0: E[a^+] = 0."""
+        assert relu_expected_value(-2.0, 0.0) == pytest.approx(0.0)
+
+    def test_scalar_zero_mu_zero_sigma(self):
+        """sigma=0, mu=0: E[a^+] = 0."""
+        assert relu_expected_value(0.0, 0.0) == pytest.approx(0.0)
+
+    def test_known_value_mu0_sigma1(self):
+        """mu=0, sigma=1: E[Y^+] = 1/sqrt(2*pi) = phi(0)."""
+        expected = _norm.pdf(0.0)
+        assert relu_expected_value(0.0, 1.0) == pytest.approx(expected, rel=1e-10)
+
+    def test_known_value_general(self):
+        """Verify against direct formula for mu=1, sigma=2."""
+        mu, sigma = 1.0, 2.0
+        t = mu / sigma
+        expected = sigma * _norm.pdf(t) + mu * _norm.cdf(t)
+        assert relu_expected_value(mu, sigma) == pytest.approx(expected, rel=1e-10)
+
+    def test_negative_sigma_raises(self):
+        """Negative sigma must raise ValueError."""
+        with pytest.raises(ValueError):
+            relu_expected_value(1.0, -0.5)
+
+    def test_nonfinite_mu_raises(self):
+        with pytest.raises(ValueError):
+            relu_expected_value(float("inf"), 1.0)
+
+    def test_nonfinite_sigma_raises(self):
+        with pytest.raises(ValueError):
+            relu_expected_value(0.0, float("nan"))
+
+    def test_array_input(self):
+        """Verify vectorised output matches element-wise computation."""
+        mu = np.array([0.0, 1.0, -1.0])
+        sigma = np.array([1.0, 2.0, 1.0])
+        result = relu_expected_value(mu, sigma)
+        expected = np.array([relu_expected_value(m, s) for m, s in zip(mu, sigma)])
+        np.testing.assert_allclose(result, expected, rtol=1e-12)
+
+    def test_mixed_zero_nonzero_sigma(self):
+        """Array with some zero and some nonzero sigma values."""
+        mu = np.array([2.0, -1.0, 0.0])
+        sigma = np.array([0.0, 0.0, 1.0])
+        result = relu_expected_value(mu, sigma)
+        assert result[0] == pytest.approx(2.0)
+        assert result[1] == pytest.approx(0.0)
+        assert result[2] == pytest.approx(_norm.pdf(0.0))
+
+    def test_returns_float_for_scalar(self):
+        val = relu_expected_value(1.0, 1.0)
+        assert isinstance(val, float)
