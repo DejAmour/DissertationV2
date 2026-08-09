@@ -48,6 +48,57 @@ python src/prepare_data.py
 pytest tests/test_data_quality.py -q
 ```
 
+## Asian options — Stage 1 reproducibility
+
+This repository also contains a separate Asian-options project under
+`asian_options/`. Its dependency capture is intentionally scoped to the
+Asian-options code only and does not change the Brent-analysis environment.
+
+### Validated dependency baseline
+
+- Python 3.13.1
+- numpy 2.5.2
+- scipy 1.18.0
+- torch 2.13.0+cpu
+- pytest 9.1.1
+
+Install into a clean virtual environment from the repository root:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r asian_options/requirements.txt
+```
+
+Windows PowerShell activation:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+For an immutable snapshot of the Stage 1 dependency set, see
+`asian_options/requirements-lock.txt`. Reproducibility metadata, including
+platform, Python, package versions, and deterministic-seeding settings, is
+stored in `asian_options/environment_metadata.md`.
+
+### Stage 1 validation commands
+
+```bash
+pytest -q
+python run_method_comparison.py
+```
+
+`run_method_comparison.py` writes `asian_options_method_comparison.csv` in the
+repository root after running MC, AV, CV, and NCV.
+
+### Deterministic seeding
+
+`asian_options.seed_everything()` seeds Python `random`, NumPy, and PyTorch,
+seeds CUDA when available, and enables deterministic PyTorch algorithms where
+practical. Determinism can still vary across hardware, drivers, and PyTorch
+builds, especially on CUDA-enabled systems.
+
 ## Data source attribution
 
 - Series: `DCOILBRENTEU` (Daily Europe Brent Spot Price FOB, USD/barrel)

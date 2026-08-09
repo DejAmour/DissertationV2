@@ -46,3 +46,22 @@ def test_estimate_result_namedtuple() -> None:
     )
     assert result.price == 5.0
     assert result.n_paths == 10_000
+
+
+def test_top_level_estimator_exports() -> None:
+    """The package root exposes the Stage 1 pricing entry points."""
+    from asian_options import (
+        antithetic_variates,
+        build_network,
+        geometric_control_variate,
+        ncv_estimator,
+        standard_monte_carlo,
+        train_network,
+    )
+
+    assert callable(standard_monte_carlo)
+    assert callable(antithetic_variates)
+    assert callable(geometric_control_variate)
+    assert callable(build_network)
+    assert callable(train_network)
+    assert callable(ncv_estimator)
