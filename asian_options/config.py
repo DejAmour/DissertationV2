@@ -159,20 +159,14 @@ def seed_everything(seed: int, deterministic_torch: bool = True) -> dict[str, ob
     return metadata
 
 
-def collect_environment_metadata(
-    seed: int = 0,
-) -> dict[str, object]:
+def collect_environment_metadata() -> dict[str, object]:
     """
     Collect runtime metadata needed to reproduce Stage 1 Asian-option results.
 
     Call ``seed_everything()`` first if you want the reported deterministic state
     to reflect the repository's recommended reproducibility configuration.
     """
-    if seed < 0:
-        raise ValueError(f"seed must be non-negative, got {seed}")
-
     metadata: dict[str, object] = {
-        "seed": seed,
         "platform": platform.platform(),
         "python_version": sys.version.split()[0],
     }

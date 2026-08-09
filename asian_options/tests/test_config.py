@@ -120,7 +120,7 @@ def test_seed_everything_negative_seed_raises() -> None:
 
 
 def test_collect_environment_metadata_has_stage1_fields() -> None:
-    metadata = collect_environment_metadata(seed=7)
+    metadata = collect_environment_metadata()
     for field in (
         "platform",
         "python_version",

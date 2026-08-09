@@ -77,10 +77,11 @@ Windows PowerShell activation:
 .\.venv\Scripts\Activate.ps1
 ```
 
-For an immutable snapshot of the Stage 1 dependency set, see
-`asian_options/requirements-lock.txt`. Reproducibility metadata, including
-platform, Python, package versions, and deterministic-seeding settings, is
-stored in `asian_options/environment_metadata.md`.
+`asian_options/requirements.txt` is the authoritative direct dependency spec.
+`asian_options/requirements-lock.txt` captures the full transitive dependency
+graph from the sandbox validation environment. Reproducibility metadata,
+including platform, Python, package versions, and deterministic-seeding
+settings, is stored in `asian_options/environment_metadata.md`.
 
 ### Stage 1 validation commands
 
