@@ -119,6 +119,7 @@ def seed_everything(seed: int, deterministic_torch: bool = True) -> dict[str, ob
         "cuda_seeded": False,
         "torch_deterministic_requested": deterministic_torch,
         "torch_deterministic_enabled": False,
+        "torch_deterministic_warn_only": False,
     }
 
     try:
@@ -139,7 +140,8 @@ def seed_everything(seed: int, deterministic_torch: bool = True) -> dict[str, ob
     if deterministic_torch:
         os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
         if hasattr(torch, "use_deterministic_algorithms"):
-            torch.use_deterministic_algorithms(True)
+            torch.use_deterministic_algorithms(True, warn_only=True)
+            metadata["torch_deterministic_warn_only"] = True
         if hasattr(torch.backends, "cudnn"):
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False

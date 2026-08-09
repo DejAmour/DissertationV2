@@ -8,7 +8,7 @@
 - scipy: 1.18.0
 - torch: 2.13.0+cpu
 - pytest: 9.1.1
-- Deterministic PyTorch operations enabled: yes, via `asian_options.seed_everything()`
+- Deterministic PyTorch operations enabled: yes, via `asian_options.seed_everything()` (warn-only mode)
 
 ## Audit run captured in this repository update
 
@@ -24,5 +24,5 @@
 ## Determinism notes
 
 - `seed_everything()` seeds Python `random`, NumPy, PyTorch, and CUDA when available.
-- PyTorch deterministic algorithms are requested where practical.
+- PyTorch deterministic algorithms are requested where practical in warn-only mode.
 - Results can still vary across Python versions, wheel builds, hardware, and drivers.

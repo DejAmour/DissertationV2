@@ -96,8 +96,8 @@ repository root after running MC, AV, CV, and NCV.
 
 `asian_options.seed_everything()` seeds Python `random`, NumPy, and PyTorch,
 seeds CUDA when available, and enables deterministic PyTorch algorithms where
-practical. Determinism can still vary across hardware, drivers, and PyTorch
-builds, especially on CUDA-enabled systems.
+practical in warn-only mode. Determinism can still vary across hardware,
+drivers, and PyTorch builds, especially on CUDA-enabled systems.
 
 ## Data source attribution
 
