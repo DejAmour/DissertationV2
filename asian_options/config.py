@@ -141,7 +141,6 @@ def seed_everything(seed: int, deterministic_torch: bool = True) -> dict[str, ob
         os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
         if hasattr(torch, "use_deterministic_algorithms"):
             torch.use_deterministic_algorithms(True, warn_only=True)
-            metadata["torch_deterministic_warn_only"] = True
         if hasattr(torch.backends, "cudnn"):
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
@@ -152,6 +151,10 @@ def seed_everything(seed: int, deterministic_torch: bool = True) -> dict[str, ob
         )
     else:
         metadata["torch_deterministic_enabled"] = deterministic_torch
+    if hasattr(torch, "is_deterministic_algorithms_warn_only_enabled"):
+        metadata["torch_deterministic_warn_only"] = bool(
+            torch.is_deterministic_algorithms_warn_only_enabled()
+        )
 
     return metadata
 
