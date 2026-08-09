@@ -212,23 +212,32 @@ def analytical_network_expectation(network: _ShallowNet) -> float:
     float
         Analytical expectation of H_theta(Z).
     """
-    from scipy.stats import norm
+    from asian_options.analytical import relu_expected_value
 
     W1, b1, W2, b2 = network.W1, network.b1, network.W2, network.b2
-    hidden_width = W1.shape[0]
 
-    e_relu = np.empty(hidden_width)
-    for i in range(hidden_width):
-        mu = b1[i]
-        sigma = float(np.linalg.norm(W1[i]))
-        if sigma == 0.0:
-            e_relu[i] = max(0.0, mu)
-        else:
-            t = mu / sigma
-            e_relu[i] = sigma * norm.pdf(t) + mu * norm.cdf(t)
+    # Shape validation
+    hidden_width, m = W1.shape
+    if b1.shape != (hidden_width,):
+        raise ValueError(
+            f"b1 shape {b1.shape} inconsistent with W1 hidden_width {hidden_width}."
+        )
+    if W2.shape != (1, hidden_width):
+        raise ValueError(
+            f"W2 shape {W2.shape} must be (1, {hidden_width})."
+        )
+    if b2.shape != (1,):
+        raise ValueError(f"b2 shape {b2.shape} must be (1,).")
 
-    # W2 shape (1, hidden), b2 shape (1,)
-    result = float(np.dot(np.asarray(W2, dtype=np.float64).reshape(-1), e_relu) + float(np.asarray(b2, dtype=np.float64).reshape(-1)[0]))
+    # Finite-value checks
+    for name, arr in [("W1", W1), ("b1", b1), ("W2", W2), ("b2", b2)]:
+        if not np.all(np.isfinite(arr)):
+            raise ValueError(f"Network parameter {name} contains non-finite values.")
+
+    sigma_vec = np.linalg.norm(W1, axis=1)   # shape (hidden_width,)
+    e_relu = relu_expected_value(b1, sigma_vec)
+
+    result = float(W2.reshape(-1) @ e_relu + float(b2.reshape(-1)[0]))
     return result
 
 
@@ -264,6 +273,12 @@ def ncv_estimator(network: _ShallowNet, cfg: ModelConfig):
 
     rng = np.random.default_rng(cfg.seed)
     Z = rng.standard_normal((cfg.n_paths, cfg.m))
+
+    if Z.shape[1] != network.W1.shape[1]:
+        raise ValueError(
+            f"Z has {Z.shape[1]} columns but network expects input dim "
+            f"{network.W1.shape[1]} (cfg.m={cfg.m})."
+        )
 
     paths = simulate_paths(cfg, shocks=Z)
     payoffs = arithmetic_asian_call_payoff(paths, cfg)

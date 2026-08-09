@@ -20,7 +20,6 @@ Columns: method, price, variance, std_error, ci_lower, ci_upper,
 
 from __future__ import annotations
 
-import csv
 import sys
 import traceback
 
@@ -171,25 +170,11 @@ def run_comparison():
     # ------------------------------------------------------------------
     # Write CSV
     # ------------------------------------------------------------------
-    with open(OUTPUT_CSV, "w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=CSV_FIELDNAMES)
-        writer.writeheader()
-        writer.writerows(rows)
+    from asian_options.results import save_results_csv, print_comparison_table
 
+    save_results_csv(rows, OUTPUT_CSV, fieldnames=CSV_FIELDNAMES)
     print(f"\nResults written to {OUTPUT_CSV}")
-
-    # Print a quick summary table
-    print("\n{:<6} {:>10} {:>14} {:>18}".format(
-        "Method", "Price", "Variance", "SpeedRatioVsMC"
-    ))
-    print("-" * 52)
-    for row in rows:
-        print("{:<6} {:>10} {:>14} {:>18}".format(
-            row["method"],
-            row["price"],
-            row["variance"],
-            row["speed_ratio_vs_mc"],
-        ))
+    print_comparison_table(rows)
 
 
 if __name__ == "__main__":

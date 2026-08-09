@@ -2,28 +2,26 @@
 results.py
 ==========
 Reproducible result output: CSV serialisation and console summaries.
-
-Stage 1 placeholder: interfaces defined; implementations deferred to Stage 10.
 """
 
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 from typing import Iterable
-
-from asian_options.estimators import EstimateResult
 
 
 def save_results_csv(
     results: Iterable[dict],
     path: Path,
+    fieldnames: list[str] | None = None,
 ) -> None:
     """
-    Append a sequence of result dictionaries to a CSV file.
+    Write a sequence of result dictionaries to a CSV file.
 
-    Each dictionary must contain at least the fields defined in
-    ``EstimateResult`` plus an ``estimator`` label and the experiment
-    configuration fields.
+    If the file does not exist it is created with a header row.  If it exists
+    it is overwritten.  Pass ``fieldnames`` explicitly when the result dicts
+    may have inconsistent key ordering across Python versions.
 
     Parameters
     ----------
@@ -31,13 +29,21 @@ def save_results_csv(
         Result records to write.
     path : Path
         Destination CSV file.  Parent directories must exist.
-
-    Raises
-    ------
-    NotImplementedError
-        Stage 10 will implement this function.
+    fieldnames : list[str] or None
+        Column order.  If None, the keys of the first record are used.
     """
-    raise NotImplementedError("CSV output will be implemented in Stage 10.")
+    rows = list(results)
+    if not rows:
+        return
+
+    path = Path(path)
+    if fieldnames is None:
+        fieldnames = list(rows[0].keys())
+
+    with open(path, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def print_comparison_table(results: Iterable[dict]) -> None:
@@ -47,13 +53,22 @@ def print_comparison_table(results: Iterable[dict]) -> None:
     Parameters
     ----------
     results : Iterable[dict]
-        Result records (same format as ``save_results_csv``).
-
-    Raises
-    ------
-    NotImplementedError
-        Stage 10 will implement this function.
+        Result records with at least the keys: ``method``, ``price``,
+        ``variance``, ``speed_ratio_vs_mc``.
     """
-    raise NotImplementedError(
-        "Comparison table output will be implemented in Stage 10."
-    )
+    rows = list(results)
+    if not rows:
+        print("(no results to display)")
+        return
+
+    print("\n{:<6} {:>10} {:>14} {:>18}".format(
+        "Method", "Price", "Variance", "SpeedRatioVsMC"
+    ))
+    print("-" * 52)
+    for row in rows:
+        print("{:<6} {:>10} {:>14} {:>18}".format(
+            row.get("method", ""),
+            row.get("price", ""),
+            row.get("variance", ""),
+            row.get("speed_ratio_vs_mc", ""),
+        ))

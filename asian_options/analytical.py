@@ -2,15 +2,12 @@
 analytical.py
 =============
 Analytical pricing utilities for Asian options.
-
-Stage 1 placeholder: the closed-form geometric Asian option price and the
-analytical neural-network expectation will be implemented in Stage 3 / Stage 7.
-
-Stage 2 adds: ``black_scholes_call`` — European call benchmark for simulator
-validation.
 """
 
 from __future__ import annotations
+
+import numpy as np
+from scipy.stats import norm  # type: ignore[import]
 
 from asian_options.config import ModelConfig
 
@@ -36,7 +33,6 @@ def black_scholes_call(cfg: ModelConfig) -> float:
         European call price.
     """
     from math import log, exp, sqrt
-    from scipy.stats import norm  # type: ignore[import]
 
     sqrtT = sqrt(cfg.T)
     d1 = (
@@ -99,7 +95,6 @@ def geometric_asian_call_price(cfg: ModelConfig) -> float:
         Analytical price of the discretely monitored geometric Asian call.
     """
     from math import log, exp, sqrt
-    from scipy.stats import norm  # type: ignore[import]
 
     m = cfg.m
     dt = cfg.dt
@@ -132,31 +127,62 @@ def geometric_asian_call_price(cfg: ModelConfig) -> float:
     return float(price)
 
 
-def relu_expected_value(mu: float, sigma: float) -> float:
+def relu_expected_value(mu, sigma):
     """
     Analytical expectation of max(a, 0) where a ~ N(mu, sigma^2).
 
-    E[a^+] = sigma * phi(mu/sigma) + mu * Phi(mu/sigma)
+    For Y ~ N(0, 1) and a = mu + sigma*Y::
 
-    When sigma == 0, E[a^+] = max(mu, 0).
+        E[a^+] = sigma * phi(mu/sigma) + mu * Phi(mu/sigma)
+
+    When sigma == 0::
+
+        E[a^+] = max(mu, 0)
+
+    Supports scalar and array inputs.
 
     Parameters
     ----------
-    mu : float
-        Mean of the pre-activation.
-    sigma : float
-        Standard deviation of the pre-activation (>= 0).
+    mu : float or array-like
+        Mean of the pre-activation (finite values required).
+    sigma : float or array-like
+        Standard deviation of the pre-activation.  Must be >= 0.
 
     Returns
     -------
-    float
-        E[max(a, 0)].
+    float or np.ndarray
+        E[max(a, 0)], same shape as inputs after broadcasting.
 
     Raises
     ------
-    NotImplementedError
-        Stage 7 will implement the full analytical network expectation.
+    ValueError
+        If any element of sigma is strictly negative.
+    ValueError
+        If mu or sigma contains non-finite values.
     """
-    raise NotImplementedError(
-        "Analytical ReLU expectation will be implemented in Stage 7."
-    )
+    mu = np.asarray(mu, dtype=np.float64)
+    sigma = np.asarray(sigma, dtype=np.float64)
+
+    if not np.all(np.isfinite(mu)):
+        raise ValueError("mu must contain only finite values.")
+    if not np.all(np.isfinite(sigma)):
+        raise ValueError("sigma must contain only finite values.")
+    if np.any(sigma < 0):
+        raise ValueError("sigma must be non-negative; got negative value(s).")
+
+    scalar_input = mu.ndim == 0 and sigma.ndim == 0
+
+    mu, sigma = np.broadcast_arrays(mu, sigma)
+    result = np.empty(mu.shape, dtype=np.float64)
+
+    zero_mask = sigma == 0.0
+    pos_mask = ~zero_mask
+
+    if np.any(zero_mask):
+        result[zero_mask] = np.maximum(0.0, mu[zero_mask])
+
+    if np.any(pos_mask):
+        t = mu[pos_mask] / sigma[pos_mask]
+        result[pos_mask] = sigma[pos_mask] * norm.pdf(t) + mu[pos_mask] * norm.cdf(t)
+
+    return float(result) if scalar_input else result
