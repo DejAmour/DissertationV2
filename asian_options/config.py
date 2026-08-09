@@ -158,18 +158,21 @@ def seed_everything(seed: int, deterministic_torch: bool = True) -> dict[str, ob
 
 def collect_environment_metadata(
     seed: int = 0,
-    deterministic_torch: bool = True,
 ) -> dict[str, object]:
     """
     Collect runtime metadata needed to reproduce Stage 1 Asian-option results.
+
+    Call ``seed_everything()`` first if you want the reported deterministic state
+    to reflect the repository's recommended reproducibility configuration.
     """
-    metadata = seed_everything(seed=seed, deterministic_torch=deterministic_torch)
-    metadata.update(
-        {
-            "platform": platform.platform(),
-            "python_version": sys.version.split()[0],
-        }
-    )
+    if seed < 0:
+        raise ValueError(f"seed must be non-negative, got {seed}")
+
+    metadata: dict[str, object] = {
+        "seed": seed,
+        "platform": platform.platform(),
+        "python_version": sys.version.split()[0],
+    }
 
     for package_name in ("numpy", "scipy", "torch", "pytest"):
         try:
@@ -180,5 +183,28 @@ def collect_environment_metadata(
             metadata[f"{package_name}_version"] = getattr(
                 module, "__version__", "unknown"
             )
+
+    try:
+        torch = import_module("torch")
+    except ImportError:
+        metadata["torch_available"] = False
+        metadata["cuda_available"] = False
+        metadata["torch_deterministic_enabled"] = False
+        metadata["torch_deterministic_warn_only"] = False
+    else:
+        metadata["torch_available"] = True
+        metadata["cuda_available"] = bool(torch.cuda.is_available())
+        if hasattr(torch, "are_deterministic_algorithms_enabled"):
+            metadata["torch_deterministic_enabled"] = bool(
+                torch.are_deterministic_algorithms_enabled()
+            )
+        else:
+            metadata["torch_deterministic_enabled"] = False
+        if hasattr(torch, "is_deterministic_algorithms_warn_only_enabled"):
+            metadata["torch_deterministic_warn_only"] = bool(
+                torch.is_deterministic_algorithms_warn_only_enabled()
+            )
+        else:
+            metadata["torch_deterministic_warn_only"] = False
 
     return metadata

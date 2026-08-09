@@ -20,6 +20,7 @@
 - pytest: 9.1.1
 - CUDA available: no
 - Deterministic PyTorch operations enabled: yes
+- Deterministic PyTorch warn-only mode: yes
 
 ## Determinism notes
 
