@@ -26,6 +26,7 @@ from asian_options.results import (
     STATISTICAL_OUTPUT_COLUMNS,
     RUNTIME_OUTPUT_COLUMNS,
     PUBLICATION_TABLE_COLUMNS,
+    STABLE_PUBLICATION_COLUMNS,
     METRIC_DEFINITIONS,
     METRIC_UNITS,
     PUBLICATION_TABLE_NOTES,
@@ -318,13 +319,14 @@ def _run_validation_profile(args: argparse.Namespace, now: datetime, run_dir: Pa
     files.append({"path": merged_summary_path.name, "purpose": "Merged publication-ready summary across profile configs", "columns": publication_columns})
 
     summary_stable_path = run_dir / "summary_stable.csv"
+    stable_columns = ["profile_name", "profile_version", "profile_config_id", "profile_config_label", *STABLE_PUBLICATION_COLUMNS]
     write_stable_csv(
         publication_rows,
         summary_stable_path,
-        fieldnames=publication_columns,
+        fieldnames=stable_columns,
         sort_keys=("profile_config_id", "mode", "method", "pricing_observations", "seed", "replication"),
     )
-    files.append({"path": summary_stable_path.name, "purpose": "Stable deterministic summary for profile reproducibility", "columns": publication_columns})
+    files.append({"path": summary_stable_path.name, "purpose": "Stable deterministic summary for profile reproducibility (runtime fields excluded; see mode_c_runtime_raw.csv for timing data)", "columns": stable_columns})
 
     paper_csv = run_dir / "paper_table.csv"
     save_results_csv(publication_rows, paper_csv, fieldnames=publication_columns)
@@ -504,10 +506,10 @@ def main() -> int:
     write_stable_csv(
         publication_rows,
         summary_stable_path,
-        fieldnames=PUBLICATION_TABLE_COLUMNS,
+        fieldnames=STABLE_PUBLICATION_COLUMNS,
         sort_keys=("mode", "method", "pricing_observations", "seed", "replication"),
     )
-    files.append({"path": summary_stable_path.name, "purpose": "Stable deterministic summary for reproducibility checks", "columns": PUBLICATION_TABLE_COLUMNS})
+    files.append({"path": summary_stable_path.name, "purpose": "Stable deterministic summary for reproducibility checks (runtime fields excluded; see mode_c_runtime_raw.csv for timing data)", "columns": STABLE_PUBLICATION_COLUMNS})
 
     paper_csv = run_dir / "paper_table.csv"
     save_results_csv(publication_rows, paper_csv, fieldnames=PUBLICATION_TABLE_COLUMNS)
