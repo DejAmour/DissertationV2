@@ -24,8 +24,194 @@ Stage 5 additions
 from __future__ import annotations
 
 import csv
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Iterable
+
+RESULT_SCHEMA_VERSION = "1.0"
+
+STATISTICAL_OUTPUT_COLUMNS = [
+    "comparison_mode",
+    "method",
+    "price",
+    "std_error",
+    "observation_variance",
+    "estimator_variance",
+    "variance_reduction_ratio",
+    "pricing_observations",
+    "pricing_simulated_paths",
+    "pilot_paths",
+    "training_paths",
+    "total_simulated_paths",
+    "runtime_s",
+    "notes",
+    "seed",
+    "replication",
+]
+
+RUNTIME_OUTPUT_COLUMNS = [
+    "comparison_mode",
+    "method",
+    "runtime_seconds",
+    "time_per_observation",
+    "time_per_simulated_path",
+    "efficiency_gain_vs_mc",
+    "timing_scope",
+    "pricing_observations",
+    "pricing_simulated_paths",
+    "pilot_paths",
+    "training_paths",
+    "total_simulated_paths",
+    "price",
+    "std_error",
+    "observation_variance",
+    "estimator_variance",
+    "notes",
+    "seed",
+    "replication",
+]
+
+PUBLICATION_TABLE_COLUMNS = [
+    "method",
+    "mode",
+    "price_estimate",
+    "standard_error",
+    "observation_variance",
+    "estimator_variance",
+    "variance_reduction_ratio",
+    "runtime_seconds",
+    "time_per_observation",
+    "time_per_simulated_path",
+    "efficiency_gain_vs_mc",
+    "pricing_observations",
+    "pricing_simulated_paths",
+    "pilot_paths",
+    "training_paths",
+    "total_simulated_paths",
+    "timing_scope_note",
+]
+
+METRIC_DEFINITIONS = {
+    "observation_variance": "sample variance (ddof=1) of per-observation corrected payoffs",
+    "estimator_variance": "observation_variance / pricing_observations",
+    "variance_reduction_ratio": "MC_observation_variance / method_observation_variance",
+    "standard_error": "sqrt(estimator_variance)",
+    "time_per_observation": "runtime_seconds / pricing_observations",
+    "time_per_simulated_path": "runtime_seconds / pricing_simulated_paths",
+    "efficiency_gain_vs_mc": (
+        "(MC_estimator_variance * MC_runtime_seconds) / "
+        "(method_estimator_variance * method_runtime_seconds)"
+    ),
+}
+
+METRIC_UNITS = {
+    "runtime_seconds": "seconds",
+    "time_per_observation": "seconds/observation",
+    "time_per_simulated_path": "seconds/path",
+    "pricing_observations": "observations",
+    "pricing_simulated_paths": "paths",
+    "pilot_paths": "paths",
+    "training_paths": "paths",
+    "total_simulated_paths": "paths",
+    "observation_variance": "price^2",
+    "estimator_variance": "price^2",
+    "variance_reduction_ratio": "dimensionless",
+    "efficiency_gain_vs_mc": "dimensionless",
+}
+
+PUBLICATION_TABLE_NOTES = """Metric notes:
+- variance_reduction_ratio = MC_observation_variance / method_observation_variance (variance metric only).
+- efficiency_gain_vs_mc = (MC_estimator_variance * MC_runtime_seconds) / (method_estimator_variance * method_runtime_seconds) (speed+precision metric).
+- AV uses 2 simulated paths per pair observation.
+- CV pilot paths and NCV training paths consume total path budget in equal-budget mode.
+- Variance reduction is not speedup; do not compare variance_reduction_ratio and efficiency_gain_vs_mc as interchangeable metrics.
+"""
+
+
+def _normalize_rows(rows: Iterable[dict], columns: Sequence[str]) -> list[dict]:
+    normalized = []
+    for row in rows:
+        normalized.append({col: row.get(col, "NA") for col in columns})
+    return normalized
+
+
+def normalize_statistical_rows(rows: Iterable[dict]) -> list[dict]:
+    return _normalize_rows(rows, STATISTICAL_OUTPUT_COLUMNS)
+
+
+def normalize_runtime_rows(rows: Iterable[dict]) -> list[dict]:
+    return _normalize_rows(rows, RUNTIME_OUTPUT_COLUMNS)
+
+
+def write_stable_csv(rows: Iterable[dict], path: Path, fieldnames: Sequence[str], sort_keys: Sequence[str]) -> None:
+    normalized = _normalize_rows(rows, fieldnames)
+    normalized.sort(key=lambda row: tuple(str(row.get(k, "")) for k in sort_keys))
+    with open(path, "w", newline="") as fh:
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=list(fieldnames),
+            extrasaction="ignore",
+            lineterminator="\n",
+        )
+        writer.writeheader()
+        writer.writerows(normalized)
+
+
+def build_publication_summary_rows(stat_rows: Iterable[dict], runtime_rows: Iterable[dict]) -> list[dict]:
+    rows = []
+    for row in stat_rows:
+        rows.append({
+            "method": row.get("method", "NA"),
+            "mode": row.get("comparison_mode", "NA"),
+            "price_estimate": row.get("price", "NA"),
+            "standard_error": row.get("std_error", "NA"),
+            "observation_variance": row.get("observation_variance", "NA"),
+            "estimator_variance": row.get("estimator_variance", "NA"),
+            "variance_reduction_ratio": row.get("variance_reduction_ratio", "NA"),
+            "runtime_seconds": "NA",
+            "time_per_observation": "NA",
+            "time_per_simulated_path": "NA",
+            "efficiency_gain_vs_mc": "NA",
+            "pricing_observations": row.get("pricing_observations", "NA"),
+            "pricing_simulated_paths": row.get("pricing_simulated_paths", "NA"),
+            "pilot_paths": row.get("pilot_paths", "NA"),
+            "training_paths": row.get("training_paths", "NA"),
+            "total_simulated_paths": row.get("total_simulated_paths", "NA"),
+            "timing_scope_note": "NA",
+        })
+    for row in runtime_rows:
+        rows.append({
+            "method": row.get("method", "NA"),
+            "mode": row.get("comparison_mode", "NA"),
+            "price_estimate": row.get("price", "NA"),
+            "standard_error": row.get("std_error", "NA"),
+            "observation_variance": row.get("observation_variance", "NA"),
+            "estimator_variance": row.get("estimator_variance", "NA"),
+            "variance_reduction_ratio": "NA",
+            "runtime_seconds": row.get("runtime_seconds", "NA"),
+            "time_per_observation": row.get("time_per_observation", "NA"),
+            "time_per_simulated_path": row.get("time_per_simulated_path", "NA"),
+            "efficiency_gain_vs_mc": row.get("efficiency_gain_vs_mc", "NA"),
+            "pricing_observations": row.get("pricing_observations", "NA"),
+            "pricing_simulated_paths": row.get("pricing_simulated_paths", "NA"),
+            "pilot_paths": row.get("pilot_paths", "NA"),
+            "training_paths": row.get("training_paths", "NA"),
+            "total_simulated_paths": row.get("total_simulated_paths", "NA"),
+            "timing_scope_note": row.get("timing_scope", "NA"),
+        })
+    return _normalize_rows(rows, PUBLICATION_TABLE_COLUMNS)
+
+
+def write_publication_markdown(rows: Iterable[dict], path: Path) -> None:
+    rows = _normalize_rows(rows, PUBLICATION_TABLE_COLUMNS)
+    header = "| " + " | ".join(PUBLICATION_TABLE_COLUMNS) + " |"
+    separator = "| " + " | ".join(["---"] * len(PUBLICATION_TABLE_COLUMNS)) + " |"
+    lines = [header, separator]
+    for row in rows:
+        lines.append("| " + " | ".join(str(row[col]) for col in PUBLICATION_TABLE_COLUMNS) + " |")
+    lines.append("")
+    lines.append(PUBLICATION_TABLE_NOTES.strip())
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def save_results_csv(
@@ -194,6 +380,10 @@ def make_runtime_row(
 
     n_obs = getattr(result, "pricing_observations", getattr(result, "n_paths", 1))
     n_paths = getattr(result, "pricing_simulated_paths", n_obs)
+    pilot_paths = getattr(result, "pilot_paths", 0)
+    training_paths = getattr(result, "training_paths", 0)
+    total_paths = getattr(result, "total_simulated_paths", n_paths + pilot_paths + training_paths)
+    obs_var = getattr(result, "observation_variance", getattr(result, "variance", float("nan")))
     est_var = getattr(result, "estimator_variance", result.variance / max(n_obs, 1))
 
     tpo = runtime_seconds / max(n_obs, 1)
@@ -212,10 +402,17 @@ def make_runtime_row(
         "runtime_seconds": f"{runtime_seconds:.6f}",
         "pricing_observations": n_obs,
         "pricing_simulated_paths": n_paths,
+        "pilot_paths": pilot_paths,
+        "training_paths": training_paths,
+        "total_simulated_paths": total_paths,
+        "price": f"{getattr(result, 'price', float('nan')):.6f}",
+        "std_error": f"{getattr(result, 'std_error', float('nan')):.6f}",
+        "observation_variance": f"{obs_var:.8e}",
         "time_per_observation": f"{tpo:.8e}",
         "time_per_simulated_path": f"{tpsp:.8e}",
         "estimator_variance": f"{est_var:.8e}",
         "efficiency_gain_vs_mc": eff_str,
+        "notes": "",
         "timing_scope": timing_scope,
     }
 
