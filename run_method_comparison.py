@@ -11,25 +11,38 @@ Methods compared
 3. Geometric Control Variate (CV)
 4. Neural Control Variate (NCV)
 
-Comparison modes (Stage 4)
---------------------------
-A) Equal pricing-observation comparison
+Comparison modes
+----------------
+A) Equal pricing-observation comparison (Stage 4)
    Every method receives the same number of independent estimator observations
    (cfg.n_paths).  Reports raw observation variance and variance-reduction
    ratio.  AV uses 2 * n_paths simulated paths (2 per pair observation).
 
-B) Equal total-path-budget comparison
+B) Equal total-path-budget comparison (Stage 4)
    Every method receives the same total simulated-path allowance
    (TOTAL_PATH_BUDGET).  AV gets half as many pair observations (budget/2).
    CV deducts pilot paths from pricing allowance (budget - n_pilot).
    NCV deducts training paths from pricing allowance (budget - n_training).
    Reports resulting standard error and estimator variance.
 
+C) Runtime/efficiency comparison (Stage 5)
+   Measures wall-clock time for each method in equal-pricing-observation
+   mode.  Reports time_per_observation, time_per_simulated_path, and
+   efficiency_gain_vs_mc.
+
+   Timing scope: pricing step only (simulation + payoff + correction).
+   NCV training is excluded from pricing timing and noted separately.
+
+   Efficiency formula:
+       efficiency_gain = (MC_estimator_variance * MC_runtime_s)
+                       / (method_estimator_variance * method_runtime_s)
+
 Output
 ------
-Two CSV files:
+Three CSV files:
   asian_options_equal_obs_comparison.csv
   asian_options_equal_budget_comparison.csv
+  asian_options_runtime_comparison.csv
 """
 
 from __future__ import annotations
@@ -47,7 +60,7 @@ from asian_options.estimators import (
     antithetic_variates,
     geometric_control_variate,
 )
-from asian_options.results import save_results_csv, print_comparison_table
+from asian_options.results import save_results_csv, print_comparison_table, make_runtime_row, print_runtime_table
 
 # ---------------------------------------------------------------------------
 # Experiment configuration
@@ -70,6 +83,20 @@ TOTAL_PATH_BUDGET = 50_000   # equal-budget mode
 
 OUTPUT_EQUAL_OBS = "asian_options_equal_obs_comparison.csv"
 OUTPUT_EQUAL_BUDGET = "asian_options_equal_budget_comparison.csv"
+OUTPUT_RUNTIME = "asian_options_runtime_comparison.csv"
+
+RUNTIME_CSV_FIELDNAMES = [
+    "comparison_mode",
+    "method",
+    "runtime_seconds",
+    "pricing_observations",
+    "pricing_simulated_paths",
+    "time_per_observation",
+    "time_per_simulated_path",
+    "estimator_variance",
+    "efficiency_gain_vs_mc",
+    "timing_scope",
+]
 
 CSV_FIELDNAMES = [
     "comparison_mode",
@@ -282,6 +309,130 @@ def run_equal_budget_comparison() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Mode C — runtime/efficiency comparison (Stage 5)
+# ---------------------------------------------------------------------------
+
+def run_runtime_comparison() -> list[dict]:
+    """
+    Measure wall-clock time for each method under equal pricing-observation
+    mode (cfg.n_paths observations each).
+
+    Timing scope
+    ------------
+    The timed region covers: path simulation + payoff computation + any
+    control-variate correction.  It does **not** include NCV network training
+    (which is a one-off setup cost); training time is reported separately in
+    the ``timing_scope`` field.
+
+    Efficiency formula
+    ------------------
+    efficiency_gain_vs_mc = (MC_estimator_variance * MC_runtime_s)
+                           / (method_estimator_variance * method_runtime_s)
+
+    Values > 1 mean the method delivers the same precision as MC in less
+    compute time.  This is *not* the same as the variance-reduction ratio.
+    """
+    import time as _time
+    seed_everything(CFG.seed)
+    rows = []
+
+    # --- MC ---
+    print("  [C] Timing MC...", flush=True)
+    t0 = _time.perf_counter()
+    mc = standard_monte_carlo(CFG)
+    mc_runtime = _time.perf_counter() - t0
+    mc_est_var = mc.estimator_variance
+    mc_row = make_runtime_row(
+        "C_runtime", "MC", mc, mc_runtime, mc_est_var, mc_runtime,
+        timing_scope="pricing only (simulation + payoff)",
+    )
+    rows.append(mc_row)
+    print(f"      MC: runtime={mc_runtime:.4f}s  est_var={mc_est_var:.4e}")
+
+    # --- AV ---
+    print("  [C] Timing AV...", flush=True)
+    t0 = _time.perf_counter()
+    av = antithetic_variates(CFG)
+    av_runtime = _time.perf_counter() - t0
+    rows.append(make_runtime_row(
+        "C_runtime", "AV", av, av_runtime, mc_est_var, mc_runtime,
+        timing_scope="pricing only (antithetic pair simulation + payoff)",
+    ))
+    print(f"      AV: runtime={av_runtime:.4f}s  est_var={av.estimator_variance:.4e}")
+
+    # --- CV ---
+    print("  [C] Timing CV (includes pilot)...", flush=True)
+    t0 = _time.perf_counter()
+    cv = geometric_control_variate(CFG, n_pilot=N_PILOT)
+    cv_runtime = _time.perf_counter() - t0
+    rows.append(make_runtime_row(
+        "C_runtime", "CV", cv, cv_runtime, mc_est_var, mc_runtime,
+        timing_scope=f"pricing + pilot ({N_PILOT} pilot paths included)",
+    ))
+    print(f"      CV: runtime={cv_runtime:.4f}s  est_var={cv.estimator_variance:.4e}")
+
+    # --- NCV ---
+    print("  [C] Timing NCV (pricing only; training excluded)...", flush=True)
+    try:
+        # Train first (not timed as pricing runtime)
+        from asian_options.neural_cv import build_network, train_network
+        from asian_options.simulate_gbm import simulate_paths
+        from asian_options.payoffs import arithmetic_asian_call_payoff
+        import time as _t2
+
+        train_cfg = dataclasses.replace(CFG, n_paths=N_TRAINING, seed=CFG.seed + 100)
+        train_paths = simulate_paths(train_cfg)
+        train_payoffs = arithmetic_asian_call_payoff(train_paths, train_cfg)
+        dt = train_cfg.dt
+        drift = (train_cfg.r - train_cfg.q - 0.5 * train_cfg.sigma ** 2) * dt
+        diffusion = math.sqrt(dt) * train_cfg.sigma
+        log_S = np.log(train_paths / train_cfg.S0)
+        log_inc = np.diff(np.hstack([np.zeros((N_TRAINING, 1)), log_S]), axis=1)
+        Z_train = (log_inc - drift) / diffusion
+        dataset = {"X_train": Z_train, "y_train": train_payoffs}
+        network = build_network(train_cfg, hidden_width=32)
+        t_train_start = _t2.perf_counter()
+        train_network(network, dataset, train_cfg, n_epochs=100)
+        training_time = _t2.perf_counter() - t_train_start
+
+        # Timed pricing step
+        from asian_options.neural_cv import ncv_estimator
+        price_cfg = dataclasses.replace(CFG, seed=CFG.seed + 200)
+        t0 = _t2.perf_counter()
+        ncv = ncv_estimator(network, price_cfg, n_training_paths=N_TRAINING)
+        ncv_pricing_runtime = _t2.perf_counter() - t0
+
+        rows.append(make_runtime_row(
+            "C_runtime", "NCV", ncv, ncv_pricing_runtime,
+            mc_est_var, mc_runtime,
+            timing_scope=(
+                f"pricing only ({N_TRAINING} training paths excluded; "
+                f"training_time={training_time:.4f}s noted separately)"
+            ),
+        ))
+        print(f"      NCV: pricing_runtime={ncv_pricing_runtime:.4f}s  "
+              f"training_time={training_time:.4f}s  "
+              f"est_var={ncv.estimator_variance:.4e}")
+    except Exception as exc:
+        err = f"{type(exc).__name__}: {exc}"
+        print(f"      NCV FAILED: {err}", file=sys.stderr)
+        rows.append({
+            "comparison_mode": "C_runtime",
+            "method": "NCV",
+            "runtime_seconds": "ERROR",
+            "pricing_observations": "ERROR",
+            "pricing_simulated_paths": "ERROR",
+            "time_per_observation": "ERROR",
+            "time_per_simulated_path": "ERROR",
+            "estimator_variance": "ERROR",
+            "efficiency_gain_vs_mc": "ERROR",
+            "timing_scope": err,
+        })
+
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -297,6 +448,12 @@ def run_comparison():
     save_results_csv(rows_b, OUTPUT_EQUAL_BUDGET, fieldnames=CSV_FIELDNAMES)
     print(f"\nResults written to {OUTPUT_EQUAL_BUDGET}")
     print_comparison_table(rows_b)
+
+    print("\n=== Mode C: Runtime/efficiency comparison (Stage 5) ===")
+    rows_c = run_runtime_comparison()
+    save_results_csv(rows_c, OUTPUT_RUNTIME, fieldnames=RUNTIME_CSV_FIELDNAMES)
+    print(f"\nResults written to {OUTPUT_RUNTIME}")
+    print_runtime_table(rows_c)
 
 
 if __name__ == "__main__":
