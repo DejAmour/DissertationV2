@@ -89,12 +89,17 @@ RUNTIME_CSV_FIELDNAMES = [
     "comparison_mode",
     "method",
     "runtime_seconds",
+    "pricing_runtime_seconds",
+    "training_runtime_seconds",
+    "end_to_end_runtime_seconds",
     "pricing_observations",
     "pricing_simulated_paths",
     "time_per_observation",
     "time_per_simulated_path",
     "estimator_variance",
     "efficiency_gain_vs_mc",
+    "pricing_only_efficiency_gain_vs_mc",
+    "end_to_end_efficiency_gain_vs_mc",
     "timing_scope",
 ]
 
@@ -164,10 +169,13 @@ def _error_row(mode: str, method: str, error: str) -> dict:
 
 
 def _run_ncv(cfg: ModelConfig, n_train: int, seed_offset_train: int = 100, seed_offset_price: int = 200):
-    """Run NCV, returning (result, n_training_paths) or raise."""
+    """Run NCV, returning result with training_runtime_seconds populated or raise."""
+    import time as _time
     from asian_options.neural_cv import build_network, train_network, ncv_estimator
     from asian_options.simulate_gbm import simulate_paths
     from asian_options.payoffs import arithmetic_asian_call_payoff
+
+    t_train_start = _time.perf_counter()
 
     train_cfg = dataclasses.replace(cfg, n_paths=n_train, seed=cfg.seed + seed_offset_train)
     train_paths = simulate_paths(train_cfg)
@@ -186,8 +194,16 @@ def _run_ncv(cfg: ModelConfig, n_train: int, seed_offset_train: int = 100, seed_
     network = build_network(train_cfg, hidden_width=32)
     train_network(network, dataset, train_cfg, n_epochs=100)
 
+    training_runtime_s = _time.perf_counter() - t_train_start
+
     price_cfg = dataclasses.replace(cfg, seed=cfg.seed + seed_offset_price)
     ncv_result = ncv_estimator(network, price_cfg, n_training_paths=n_train)
+
+    # Attach training time to the result so callers have full scope accounting
+    ncv_result = ncv_result._replace(
+        training_runtime_seconds=training_runtime_s,
+        end_to_end_runtime_seconds=ncv_result.pricing_runtime_seconds + training_runtime_s,
+    )
     return ncv_result
 
 
@@ -353,7 +369,6 @@ def run_runtime_comparison(
     Values > 1 mean the method delivers the same precision as MC in less
     compute time.  This is *not* the same as the variance-reduction ratio.
     """
-    import time as _time
     cfg = CFG if cfg is None else cfg
     n_pilot = N_PILOT if n_pilot is None else n_pilot
     n_training = N_TRAINING if n_training is None else n_training
@@ -362,89 +377,72 @@ def run_runtime_comparison(
 
     # --- MC ---
     print("  [C] Timing MC...", flush=True)
-    t0 = _time.perf_counter()
     mc = standard_monte_carlo(cfg)
-    mc_runtime = _time.perf_counter() - t0
+    mc_pricing_rt = mc.pricing_runtime_seconds
+    mc_e2e_rt = mc.end_to_end_runtime_seconds
     mc_est_var = mc.estimator_variance
     mc_row = make_runtime_row(
-        "C_runtime", "MC", mc, mc_runtime, mc_est_var, mc_runtime,
-        timing_scope="pricing only (simulation + payoff)",
+        "C_runtime", "MC", mc, mc_e2e_rt, mc_est_var,
+        mc_runtime_s=mc_e2e_rt,
+        timing_scope="pricing only (simulation + payoff); no training phase",
+        mc_pricing_runtime_s=mc_pricing_rt,
+        mc_end_to_end_runtime_s=mc_e2e_rt,
     )
     rows.append(mc_row)
-    print(f"      MC: runtime={mc_runtime:.4f}s  est_var={mc_est_var:.4e}")
+    print(f"      MC: pricing_rt={mc_pricing_rt:.4f}s  e2e_rt={mc_e2e_rt:.4f}s  est_var={mc_est_var:.4e}")
 
     # --- AV ---
     print("  [C] Timing AV...", flush=True)
-    t0 = _time.perf_counter()
     av = antithetic_variates(cfg)
-    av_runtime = _time.perf_counter() - t0
+    av_pricing_rt = av.pricing_runtime_seconds
+    av_e2e_rt = av.end_to_end_runtime_seconds
     rows.append(make_runtime_row(
-        "C_runtime", "AV", av, av_runtime, mc_est_var, mc_runtime,
-        timing_scope="pricing only (antithetic pair simulation + payoff)",
+        "C_runtime", "AV", av, av_e2e_rt, mc_est_var,
+        mc_runtime_s=mc_e2e_rt,
+        timing_scope="pricing only (antithetic pair simulation + payoff); no training phase",
+        mc_pricing_runtime_s=mc_pricing_rt,
+        mc_end_to_end_runtime_s=mc_e2e_rt,
     ))
-    print(f"      AV: runtime={av_runtime:.4f}s  est_var={av.estimator_variance:.4e}")
+    print(f"      AV: pricing_rt={av_pricing_rt:.4f}s  e2e_rt={av_e2e_rt:.4f}s  est_var={av.estimator_variance:.4e}")
 
     # --- CV ---
-    print("  [C] Timing CV (includes pilot)...", flush=True)
-    t0 = _time.perf_counter()
+    print("  [C] Timing CV (end-to-end includes pilot)...", flush=True)
     cv = geometric_control_variate(cfg, n_pilot=n_pilot)
-    cv_runtime = _time.perf_counter() - t0
+    cv_pricing_rt = cv.pricing_runtime_seconds
+    cv_train_rt = cv.training_runtime_seconds
+    cv_e2e_rt = cv.end_to_end_runtime_seconds
     rows.append(make_runtime_row(
-        "C_runtime", "CV", cv, cv_runtime, mc_est_var, mc_runtime,
-        timing_scope=f"pricing + pilot ({n_pilot} pilot paths included)",
+        "C_runtime", "CV", cv, cv_e2e_rt, mc_est_var,
+        mc_runtime_s=mc_e2e_rt,
+        timing_scope=(
+            f"end-to-end includes pilot ({n_pilot} paths, {cv_train_rt:.4f}s); "
+            f"pricing-only excludes pilot"
+        ),
+        mc_pricing_runtime_s=mc_pricing_rt,
+        mc_end_to_end_runtime_s=mc_e2e_rt,
     ))
-    print(f"      CV: runtime={cv_runtime:.4f}s  est_var={cv.estimator_variance:.4e}")
+    print(f"      CV: pricing_rt={cv_pricing_rt:.4f}s  pilot_rt={cv_train_rt:.4f}s  "
+          f"e2e_rt={cv_e2e_rt:.4f}s  est_var={cv.estimator_variance:.4e}")
 
     # --- NCV ---
-    print("  [C] Timing NCV (pricing only; training excluded)...", flush=True)
+    print("  [C] Timing NCV (end-to-end includes training)...", flush=True)
     try:
-        # Train first (not timed as pricing runtime)
-        from asian_options.neural_cv import build_network, train_network
-        from asian_options.simulate_gbm import simulate_paths
-        from asian_options.payoffs import arithmetic_asian_call_payoff
-        import time as _t2
-
-        train_cfg = dataclasses.replace(cfg, n_paths=n_training, seed=cfg.seed + 100)
-        train_paths = simulate_paths(train_cfg)
-        train_payoffs = arithmetic_asian_call_payoff(train_paths, train_cfg)
-        dt = train_cfg.dt
-        drift = (train_cfg.r - train_cfg.q - 0.5 * train_cfg.sigma ** 2) * dt
-        diffusion = math.sqrt(dt) * train_cfg.sigma
-        log_S = np.log(train_paths / train_cfg.S0)
-        log_inc = np.diff(np.hstack([np.zeros((n_training, 1)), log_S]), axis=1)
-        Z_train = (log_inc - drift) / diffusion
-        dataset = {"X_train": Z_train, "y_train": train_payoffs}
-        network = build_network(train_cfg, hidden_width=32)
-        t_train_start = _t2.perf_counter()
-        train_network(network, dataset, train_cfg, n_epochs=100)
-        training_time = _t2.perf_counter() - t_train_start
-
-        # Timed pricing step
-        from asian_options.neural_cv import ncv_estimator
-        price_cfg = dataclasses.replace(cfg, seed=cfg.seed + 200)
-        t0 = _t2.perf_counter()
-        ncv = ncv_estimator(network, price_cfg, n_training_paths=n_training)
-        ncv_pricing_runtime = _t2.perf_counter() - t0
-        include_training = timing_scope_policy == "include_ncv_training"
-        runtime_seconds = ncv_pricing_runtime + training_time if include_training else ncv_pricing_runtime
-        timing_scope = (
-            f"pricing + training ({n_training} training paths included; "
-            f"training_time={training_time:.4f}s)"
-            if include_training
-            else (
-                f"pricing only ({n_training} training paths excluded; "
-                f"training_time={training_time:.4f}s noted separately)"
-            )
-        )
-
+        ncv = _run_ncv(cfg, n_train=n_training)
+        ncv_pricing_rt = ncv.pricing_runtime_seconds
+        ncv_train_rt = ncv.training_runtime_seconds
+        ncv_e2e_rt = ncv.end_to_end_runtime_seconds
         rows.append(make_runtime_row(
-            "C_runtime", "NCV", ncv, runtime_seconds,
-            mc_est_var, mc_runtime,
-            timing_scope=timing_scope,
+            "C_runtime", "NCV", ncv, ncv_e2e_rt, mc_est_var,
+            mc_runtime_s=mc_e2e_rt,
+            timing_scope=(
+                f"end-to-end includes training ({n_training} paths, {ncv_train_rt:.4f}s); "
+                f"pricing-only excludes training"
+            ),
+            mc_pricing_runtime_s=mc_pricing_rt,
+            mc_end_to_end_runtime_s=mc_e2e_rt,
         ))
-        print(f"      NCV: pricing_runtime={ncv_pricing_runtime:.4f}s  "
-              f"training_time={training_time:.4f}s  "
-              f"est_var={ncv.estimator_variance:.4e}")
+        print(f"      NCV: pricing_rt={ncv_pricing_rt:.4f}s  training_rt={ncv_train_rt:.4f}s  "
+              f"e2e_rt={ncv_e2e_rt:.4f}s  est_var={ncv.estimator_variance:.4e}")
     except Exception as exc:
         err = f"{type(exc).__name__}: {exc}"
         print(f"      NCV FAILED: {err}", file=sys.stderr)
@@ -452,12 +450,17 @@ def run_runtime_comparison(
             "comparison_mode": "C_runtime",
             "method": "NCV",
             "runtime_seconds": "ERROR",
+            "pricing_runtime_seconds": "ERROR",
+            "training_runtime_seconds": "ERROR",
+            "end_to_end_runtime_seconds": "ERROR",
             "pricing_observations": "ERROR",
             "pricing_simulated_paths": "ERROR",
             "time_per_observation": "ERROR",
             "time_per_simulated_path": "ERROR",
             "estimator_variance": "ERROR",
             "efficiency_gain_vs_mc": "ERROR",
+            "pricing_only_efficiency_gain_vs_mc": "ERROR",
+            "end_to_end_efficiency_gain_vs_mc": "ERROR",
             "timing_scope": err,
         })
 

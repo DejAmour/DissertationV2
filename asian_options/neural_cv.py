@@ -314,4 +314,11 @@ def ncv_estimator(network: _ShallowNet, cfg: ModelConfig, n_training_paths: int 
         # Variance fields
         observation_variance=obs_var,
         estimator_variance=obs_var / n_pricing,
+        # Stage 7 runtime-scope fields:
+        # training_runtime_seconds must be set by the caller (network training
+        # happens outside ncv_estimator); use _replace() to attach it.
+        # pricing_runtime_seconds = inference step (path sim + correction)
+        pricing_runtime_seconds=runtime_s,
+        training_runtime_seconds=0.0,  # caller must override via _replace()
+        end_to_end_runtime_seconds=runtime_s,  # caller must override via _replace()
     )

@@ -4,6 +4,8 @@ import math
 from statistics import mean, stdev
 from typing import Iterable
 
+from scipy.stats import t as _t_dist
+
 from asian_options.results import save_results_csv
 
 AGGREGATE_OUTPUT_COLUMNS = [
@@ -20,6 +22,10 @@ AGGREGATE_OUTPUT_COLUMNS = [
     "ci95_lower",
     "ci95_upper",
     "ci_note",
+    "ci_dof",
+    "ci_critical_value",
+    "ci_method",
+    "ci_confidence_level",
 ]
 
 
@@ -80,18 +86,27 @@ def aggregate_validation_rows(summary_rows: Iterable[dict]) -> list[dict]:
         values = list(bucket["values"])
         n = len(values)
         avg = mean(values)
+        confidence_level = 0.95
         if n < 2:
             std_val = "NA"
             ci_low = "NA"
             ci_high = "NA"
-            ci_note = "n<2; CI undefined"
+            ci_note = "n<2; CI undefined; mean only reported"
+            ci_dof = "NA"
+            ci_crit = "NA"
+            ci_method = "NA"
         else:
+            dof = n - 1
             std_float = stdev(values)
-            half_width = 1.96 * std_float / math.sqrt(n)
+            t_crit = float(_t_dist.ppf((1 + confidence_level) / 2, df=dof))
+            half_width = t_crit * std_float / math.sqrt(n)
             std_val = f"{std_float:.10g}"
             ci_low = f"{(avg - half_width):.10g}"
             ci_high = f"{(avg + half_width):.10g}"
-            ci_note = ""
+            ci_note = f"two-sided Student-t; dof={dof}; t_crit={t_crit:.6g}"
+            ci_dof = str(dof)
+            ci_crit = f"{t_crit:.10g}"
+            ci_method = "student-t"
         aggregates.append(
             {
                 "profile_name": bucket["profile_name"],
@@ -107,6 +122,10 @@ def aggregate_validation_rows(summary_rows: Iterable[dict]) -> list[dict]:
                 "ci95_lower": ci_low,
                 "ci95_upper": ci_high,
                 "ci_note": ci_note,
+                "ci_dof": ci_dof,
+                "ci_critical_value": ci_crit,
+                "ci_method": ci_method,
+                "ci_confidence_level": str(confidence_level),
             }
         )
     return aggregates

@@ -53,9 +53,14 @@ RUNTIME_OUTPUT_COLUMNS = [
     "comparison_mode",
     "method",
     "runtime_seconds",
+    "pricing_runtime_seconds",
+    "training_runtime_seconds",
+    "end_to_end_runtime_seconds",
     "time_per_observation",
     "time_per_simulated_path",
     "efficiency_gain_vs_mc",
+    "pricing_only_efficiency_gain_vs_mc",
+    "end_to_end_efficiency_gain_vs_mc",
     "timing_scope",
     "pricing_observations",
     "pricing_simulated_paths",
@@ -370,6 +375,8 @@ def make_runtime_row(
     mc_estimator_variance: float,
     mc_runtime_s: float | None = None,
     timing_scope: str = "pricing only (excludes training/pilot)",
+    mc_pricing_runtime_s: float | None = None,
+    mc_end_to_end_runtime_s: float | None = None,
 ) -> dict:
     """
     Build a runtime/efficiency result dict for a single method.
@@ -383,14 +390,20 @@ def make_runtime_row(
     result : EstimateResult or CVEstimateResult
         Pricing result from the estimator.
     runtime_seconds : float
-        Measured wall-clock runtime for this method run.
+        Measured wall-clock runtime for this method run (end-to-end).
     mc_estimator_variance : float
         Estimator variance of the MC baseline (for efficiency computation).
     mc_runtime_s : float or None
-        Runtime of the MC baseline.  If None, ``runtime_seconds`` is used
-        (so efficiency_gain_vs_mc = 1.0 for MC itself).
+        End-to-end runtime of the MC baseline.  If None, ``runtime_seconds``
+        is used (so efficiency_gain_vs_mc = 1.0 for MC itself).
     timing_scope : str
         Human-readable description of what is included in ``runtime_seconds``.
+    mc_pricing_runtime_s : float or None
+        Pricing-only runtime of the MC baseline.  Used for
+        ``pricing_only_efficiency_gain_vs_mc``.  If None, ``mc_runtime_s`` is used.
+    mc_end_to_end_runtime_s : float or None
+        End-to-end runtime of the MC baseline.  Used for
+        ``end_to_end_efficiency_gain_vs_mc``.  If None, ``mc_runtime_s`` is used.
 
     Returns
     -------
@@ -399,6 +412,10 @@ def make_runtime_row(
     """
     if mc_runtime_s is None:
         mc_runtime_s = runtime_seconds
+    if mc_pricing_runtime_s is None:
+        mc_pricing_runtime_s = mc_runtime_s
+    if mc_end_to_end_runtime_s is None:
+        mc_end_to_end_runtime_s = mc_runtime_s
 
     n_obs = getattr(result, "pricing_observations", getattr(result, "n_paths", 1))
     n_paths = getattr(result, "pricing_simulated_paths", n_obs)
@@ -408,20 +425,37 @@ def make_runtime_row(
     obs_var = getattr(result, "observation_variance", getattr(result, "variance", float("nan")))
     est_var = getattr(result, "estimator_variance", result.variance / max(n_obs, 1))
 
-    tpo = runtime_seconds / max(n_obs, 1)
-    tpsp = runtime_seconds / max(n_paths, 1)
+    # Scope-specific runtimes from the result (fall back to runtime_seconds)
+    pricing_rt = getattr(result, "pricing_runtime_seconds", runtime_seconds)
+    training_rt = getattr(result, "training_runtime_seconds", 0.0)
+    e2e_rt = getattr(result, "end_to_end_runtime_seconds", runtime_seconds)
 
+    tpo = pricing_rt / max(n_obs, 1)
+    tpsp = pricing_rt / max(n_paths, 1)
+
+    def _eff(mc_est_var, mc_rt, method_est_var, method_rt):
+        try:
+            return f"{efficiency_gain_vs_mc(mc_est_var, mc_rt, method_est_var, method_rt):.6f}"
+        except (ValueError, ZeroDivisionError):
+            return "nan"
+
+    eff_str = _eff(mc_estimator_variance, mc_runtime_s, est_var, e2e_rt)
+    pricing_eff_str = _eff(mc_estimator_variance, mc_pricing_runtime_s, est_var, pricing_rt)
+    e2e_eff_str = _eff(mc_estimator_variance, mc_end_to_end_runtime_s, est_var, e2e_rt)
+
+    # Legacy numeric eff for backward-compatible callers that read the field directly
     try:
-        eff = efficiency_gain_vs_mc(mc_estimator_variance, mc_runtime_s, est_var, runtime_seconds)
-        eff_str = f"{eff:.6f}"
-    except (ValueError, ZeroDivisionError):
-        eff_str = "nan"
+        eff = float(eff_str)
+    except ValueError:
         eff = float("nan")
 
     return {
         "comparison_mode": comparison_mode,
         "method": method,
-        "runtime_seconds": runtime_seconds,
+        "runtime_seconds": e2e_rt,
+        "pricing_runtime_seconds": pricing_rt,
+        "training_runtime_seconds": training_rt,
+        "end_to_end_runtime_seconds": e2e_rt,
         "pricing_observations": n_obs,
         "pricing_simulated_paths": n_paths,
         "pilot_paths": pilot_paths,
@@ -434,6 +468,8 @@ def make_runtime_row(
         "time_per_simulated_path": tpsp,
         "estimator_variance": est_var,
         "efficiency_gain_vs_mc": eff,
+        "pricing_only_efficiency_gain_vs_mc": pricing_eff_str,
+        "end_to_end_efficiency_gain_vs_mc": e2e_eff_str,
         "notes": "",
         "timing_scope": timing_scope,
     }

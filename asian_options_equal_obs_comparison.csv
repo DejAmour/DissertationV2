@@ -1,0 +1,5 @@
+comparison_mode,method,pricing_observations,pricing_simulated_paths,pilot_paths,training_paths,total_simulated_paths,price,observation_variance,estimator_variance,variance_reduction_ratio,std_error,ci_lower,ci_upper,runtime_s,notes
+A_equal_obs,MC,50000,50000,0,0,50000,6.155927,7.28771656e+01,1.45754331e-03,1.0000,0.038178,6.081098,6.230755,0.0241,
+A_equal_obs,AV,50000,100000,0,0,100000,6.141699,1.72573238e+01,3.45146477e-04,4.2230,0.018578,6.105286,6.178113,0.0316,2 paths per pair; total_simulated_paths=100000
+A_equal_obs,CV,50000,50000,1000,0,51000,6.154839,5.72748053e-02,1.14549611e-06,1272.4123,0.001070,6.152741,6.156936,0.0233,pilot_paths=1000
+A_equal_obs,NCV,ERROR,ERROR,ERROR,ERROR,ERROR,ERROR,ERROR,ERROR,ERROR,ERROR,ERROR,ERROR,ERROR,ImportError: PyTorch is required for the NCV estimator. Install it with: pip install torch
