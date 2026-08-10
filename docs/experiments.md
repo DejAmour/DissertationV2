@@ -17,6 +17,17 @@ python scripts/run_experiments.py \
   --timing-scope-policy exclude_ncv_training
 ```
 
+Stage 7 validation profile:
+
+```bash
+python scripts/run_experiments.py \
+  --output-dir /tmp/stage7_runs \
+  --profile validation_minimal
+```
+
+This profile runs a compact deterministic config matrix and emits validation
+checks, aggregate confidence intervals, and a camera-ready bundle.
+
 Minimal deterministic smoke run:
 
 ```bash

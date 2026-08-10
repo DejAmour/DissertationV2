@@ -111,6 +111,22 @@ python scripts/run_experiments.py \
 See `docs/experiments.md` for exact metric definitions, mode semantics, and
 reproducibility guidance.
 
+### Stage 7 validation + packaging profile
+
+Run the Stage 7 validation milestone bundle:
+
+```bash
+python scripts/run_experiments.py \
+  --output-dir /tmp/stage7_runs \
+  --profile validation_minimal
+```
+
+This writes a camera-ready bundle including raw mode CSVs, merged/stable
+summaries, publication tables, validation aggregates with 95% CIs,
+manifest/metadata, and a validation pass/fail report.
+See `docs/validation.md` for formulas, interpretation, troubleshooting, and
+safe-claims boundaries.
+
 `run_method_comparison.py` writes `asian_options_method_comparison.csv` in the
 repository root after running MC, AV, CV, and NCV.
 
