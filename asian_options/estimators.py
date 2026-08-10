@@ -99,6 +99,13 @@ class EstimateResult(NamedTuple):
     # Stage 4 variance fields
     observation_variance: float = 0.0
     estimator_variance: float = 0.0
+    # Stage 7 runtime-scope fields
+    # pricing_runtime_seconds: simulation + payoff + correction only (no training/pilot)
+    # training_runtime_seconds: pilot (CV) or network training (NCV); 0.0 for MC/AV
+    # end_to_end_runtime_seconds: training + pricing + all prep (>= pricing + training)
+    pricing_runtime_seconds: float = 0.0
+    training_runtime_seconds: float = 0.0
+    end_to_end_runtime_seconds: float = 0.0
 
 
 class CVEstimateResult(NamedTuple):
@@ -148,6 +155,10 @@ class CVEstimateResult(NamedTuple):
     # Stage 4 variance fields
     observation_variance: float = 0.0
     estimator_variance: float = 0.0
+    # Stage 7 runtime-scope fields
+    pricing_runtime_seconds: float = 0.0
+    training_runtime_seconds: float = 0.0
+    end_to_end_runtime_seconds: float = 0.0
 
 
 def standard_monte_carlo(cfg: ModelConfig) -> EstimateResult:
@@ -199,6 +210,10 @@ def standard_monte_carlo(cfg: ModelConfig) -> EstimateResult:
         # Variance fields
         observation_variance=obs_var,
         estimator_variance=obs_var / n_obs,
+        # Stage 7 runtime-scope fields: MC has no training/pilot phase
+        pricing_runtime_seconds=runtime_s,
+        training_runtime_seconds=0.0,
+        end_to_end_runtime_seconds=runtime_s,
     )
 
 
@@ -273,6 +288,10 @@ def antithetic_variates(cfg: ModelConfig) -> EstimateResult:
         # Variance fields
         observation_variance=obs_var,
         estimator_variance=obs_var / n_pairs,
+        # Stage 7 runtime-scope fields: AV has no training/pilot phase
+        pricing_runtime_seconds=runtime_s,
+        training_runtime_seconds=0.0,
+        end_to_end_runtime_seconds=runtime_s,
     )
 
 
@@ -358,6 +377,9 @@ def geometric_control_variate(
     else:
         corr_estimate = float(np.corrcoef(x_pilot, g_pilot)[0, 1])
 
+    t_after_pilot = time.perf_counter()
+    training_runtime_s = t_after_pilot - t0  # pilot simulation + beta estimation
+
     # --- Main sample: independent seed to avoid pilot correlation bias ---
     main_cfg = dataclasses.replace(cfg, seed=cfg.seed + 1)
     main_paths = simulate_paths(main_cfg)
@@ -366,7 +388,9 @@ def geometric_control_variate(
 
     corrected = apply_control_variate(x_main, g_main, beta_hat, eg)
 
-    runtime_s = time.perf_counter() - t0
+    t_end = time.perf_counter()
+    pricing_runtime_s = t_end - t_after_pilot  # main sample only
+    runtime_s = t_end - t0  # end-to-end: pilot + pricing
     stats = summarise_estimates(corrected, cfg.discount_factor, runtime_s)
     n_pricing = stats["n_paths"]
     obs_var = stats["variance"]
@@ -379,7 +403,7 @@ def geometric_control_variate(
         ci_lower=stats["ci_lower"],
         ci_upper=stats["ci_upper"],
         n_paths=n_pricing,
-        runtime_s=stats["runtime_s"],
+        runtime_s=runtime_s,
         beta_hat=beta_hat,
         corr_estimate=corr_estimate,
         # Budget fields: CV uses pilot paths then independent pricing paths
@@ -391,4 +415,8 @@ def geometric_control_variate(
         # Variance fields
         observation_variance=obs_var,
         estimator_variance=obs_var / n_pricing,
+        # Stage 7 runtime-scope fields: pilot is training for CV
+        pricing_runtime_seconds=pricing_runtime_s,
+        training_runtime_seconds=training_runtime_s,
+        end_to_end_runtime_seconds=runtime_s,
     )
