@@ -90,6 +90,27 @@ pytest -q
 python run_method_comparison.py
 ```
 
+### Stage 6 canonical experiment packaging
+
+For publication-ready Stage 6 outputs (raw mode CSVs, merged summary, stable
+summary for reproducibility, metadata, manifest, and run README), use:
+
+```bash
+python scripts/run_experiments.py \
+  --output-dir experiment_runs \
+  --modes A B C \
+  --seeds 42 \
+  --replications 1 \
+  --n-paths 50000 \
+  --total-path-budget 50000 \
+  --pilot-paths 1000 \
+  --training-paths 5000 \
+  --timing-scope-policy exclude_ncv_training
+```
+
+See `docs/experiments.md` for exact metric definitions, mode semantics, and
+reproducibility guidance.
+
 `run_method_comparison.py` writes `asian_options_method_comparison.csv` in the
 repository root after running MC, AV, CV, and NCV.
 

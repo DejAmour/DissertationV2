@@ -195,26 +195,33 @@ def _run_ncv(cfg: ModelConfig, n_train: int, seed_offset_train: int = 100, seed_
 # Mode A — equal pricing-observation comparison
 # ---------------------------------------------------------------------------
 
-def run_equal_obs_comparison() -> list[dict]:
+def run_equal_obs_comparison(
+    cfg: ModelConfig | None = None,
+    n_pilot: int | None = None,
+    n_training: int | None = None,
+) -> list[dict]:
     """
     Every method uses cfg.n_paths independent estimator observations.
 
     AV note: each of the n_paths pair-observations requires 2 simulated paths,
     so AV total_simulated_paths = 2 * n_paths (disclosed in output).
     """
-    seed_everything(CFG.seed)
+    cfg = CFG if cfg is None else cfg
+    n_pilot = N_PILOT if n_pilot is None else n_pilot
+    n_training = N_TRAINING if n_training is None else n_training
+    seed_everything(cfg.seed)
     rows = []
 
     # --- MC ---
     print("  [A] Running MC...", flush=True)
-    mc = standard_monte_carlo(CFG)
+    mc = standard_monte_carlo(cfg)
     mc_obs_var = mc.observation_variance
     rows.append(_result_to_row("A_equal_obs", "MC", mc, mc_obs_var))
     print(f"      MC: price={mc.price:.4f}  obs_var={mc.observation_variance:.4e}")
 
     # --- AV (n_paths pair observations => 2*n_paths simulated paths) ---
     print("  [A] Running AV (note: 2 paths per pair observation)...", flush=True)
-    av = antithetic_variates(CFG)
+    av = antithetic_variates(cfg)
     rows.append(_result_to_row("A_equal_obs", "AV", av, mc_obs_var,
                                notes=f"2 paths per pair; total_simulated_paths={av.total_simulated_paths}"))
     print(f"      AV: price={av.price:.4f}  obs_var={av.observation_variance:.4e}  "
@@ -222,18 +229,18 @@ def run_equal_obs_comparison() -> list[dict]:
 
     # --- CV ---
     print("  [A] Running CV...", flush=True)
-    cv = geometric_control_variate(CFG, n_pilot=N_PILOT)
+    cv = geometric_control_variate(cfg, n_pilot=n_pilot)
     rows.append(_result_to_row("A_equal_obs", "CV", cv, mc_obs_var,
-                               notes=f"pilot_paths={N_PILOT}"))
+                               notes=f"pilot_paths={n_pilot}"))
     print(f"      CV: price={cv.price:.4f}  obs_var={cv.observation_variance:.4e}  "
           f"vrr={mc_obs_var / cv.observation_variance:.3f}")
 
     # --- NCV ---
     print("  [A] Running NCV...", flush=True)
     try:
-        ncv = _run_ncv(CFG, n_train=N_TRAINING)
+        ncv = _run_ncv(cfg, n_train=n_training)
         rows.append(_result_to_row("A_equal_obs", "NCV", ncv, mc_obs_var,
-                                   notes=f"training_paths={N_TRAINING}"))
+                                   notes=f"training_paths={n_training}"))
         print(f"      NCV: price={ncv.price:.4f}  obs_var={ncv.observation_variance:.4e}")
     except Exception as exc:
         err = f"{type(exc).__name__}: {exc}"
@@ -247,7 +254,12 @@ def run_equal_obs_comparison() -> list[dict]:
 # Mode B — equal total-path-budget comparison
 # ---------------------------------------------------------------------------
 
-def run_equal_budget_comparison() -> list[dict]:
+def run_equal_budget_comparison(
+    cfg: ModelConfig | None = None,
+    n_pilot: int | None = None,
+    n_training: int | None = None,
+    total_path_budget: int | None = None,
+) -> list[dict]:
     """
     Every method receives TOTAL_PATH_BUDGET simulated paths in total.
 
@@ -257,13 +269,17 @@ def run_equal_budget_comparison() -> list[dict]:
     - CV  : pricing_observations = TOTAL_PATH_BUDGET - N_PILOT
     - NCV : pricing_observations = TOTAL_PATH_BUDGET - N_TRAINING
     """
-    seed_everything(CFG.seed)
+    cfg = CFG if cfg is None else cfg
+    n_pilot = N_PILOT if n_pilot is None else n_pilot
+    n_training = N_TRAINING if n_training is None else n_training
+    total_path_budget = TOTAL_PATH_BUDGET if total_path_budget is None else total_path_budget
+    seed_everything(cfg.seed)
     rows = []
 
     # --- MC ---
-    mc_n = TOTAL_PATH_BUDGET
+    mc_n = total_path_budget
     print(f"  [B] Running MC (n_paths={mc_n})...", flush=True)
-    mc_cfg = dataclasses.replace(CFG, n_paths=mc_n)
+    mc_cfg = dataclasses.replace(cfg, n_paths=mc_n)
     mc = standard_monte_carlo(mc_cfg)
     mc_obs_var = mc.observation_variance
     rows.append(_result_to_row("B_equal_budget", "MC", mc, mc_obs_var))
@@ -271,9 +287,9 @@ def run_equal_budget_comparison() -> list[dict]:
           f"est_var={mc.estimator_variance:.4e}")
 
     # --- AV (half the pairs to stay within budget) ---
-    av_pairs = TOTAL_PATH_BUDGET // 2
+    av_pairs = total_path_budget // 2
     print(f"  [B] Running AV (n_pairs={av_pairs}, total_paths={2*av_pairs})...", flush=True)
-    av_cfg = dataclasses.replace(CFG, n_paths=av_pairs)
+    av_cfg = dataclasses.replace(cfg, n_paths=av_pairs)
     av = antithetic_variates(av_cfg)
     rows.append(_result_to_row("B_equal_budget", "AV", av, mc_obs_var,
                                notes=f"AV uses 2 paths per pair; pricing_obs={av_pairs}"))
@@ -281,23 +297,23 @@ def run_equal_budget_comparison() -> list[dict]:
           f"est_var={av.estimator_variance:.4e}")
 
     # --- CV (deduct pilot from budget) ---
-    cv_pricing = TOTAL_PATH_BUDGET - N_PILOT
-    print(f"  [B] Running CV (pilot={N_PILOT}, pricing={cv_pricing})...", flush=True)
-    cv_cfg = dataclasses.replace(CFG, n_paths=cv_pricing)
-    cv = geometric_control_variate(cv_cfg, n_pilot=N_PILOT)
+    cv_pricing = total_path_budget - n_pilot
+    print(f"  [B] Running CV (pilot={n_pilot}, pricing={cv_pricing})...", flush=True)
+    cv_cfg = dataclasses.replace(cfg, n_paths=cv_pricing)
+    cv = geometric_control_variate(cv_cfg, n_pilot=n_pilot)
     rows.append(_result_to_row("B_equal_budget", "CV", cv, mc_obs_var,
-                               notes=f"pilot_paths={N_PILOT} deducted from budget"))
+                               notes=f"pilot_paths={n_pilot} deducted from budget"))
     print(f"      CV: price={cv.price:.4f}  SE={cv.std_error:.5f}  "
           f"est_var={cv.estimator_variance:.4e}")
 
     # --- NCV (deduct training from budget) ---
-    ncv_pricing = TOTAL_PATH_BUDGET - N_TRAINING
-    print(f"  [B] Running NCV (training={N_TRAINING}, pricing={ncv_pricing})...", flush=True)
+    ncv_pricing = total_path_budget - n_training
+    print(f"  [B] Running NCV (training={n_training}, pricing={ncv_pricing})...", flush=True)
     try:
-        ncv_price_cfg = dataclasses.replace(CFG, n_paths=ncv_pricing)
-        ncv = _run_ncv(ncv_price_cfg, n_train=N_TRAINING)
+        ncv_price_cfg = dataclasses.replace(cfg, n_paths=ncv_pricing)
+        ncv = _run_ncv(ncv_price_cfg, n_train=n_training)
         rows.append(_result_to_row("B_equal_budget", "NCV", ncv, mc_obs_var,
-                                   notes=f"training_paths={N_TRAINING} deducted from budget"))
+                                   notes=f"training_paths={n_training} deducted from budget"))
         print(f"      NCV: price={ncv.price:.4f}  SE={ncv.std_error:.5f}  "
               f"est_var={ncv.estimator_variance:.4e}")
     except Exception as exc:
@@ -312,7 +328,12 @@ def run_equal_budget_comparison() -> list[dict]:
 # Mode C — runtime/efficiency comparison (Stage 5)
 # ---------------------------------------------------------------------------
 
-def run_runtime_comparison() -> list[dict]:
+def run_runtime_comparison(
+    cfg: ModelConfig | None = None,
+    n_pilot: int | None = None,
+    n_training: int | None = None,
+    timing_scope_policy: str = "exclude_ncv_training",
+) -> list[dict]:
     """
     Measure wall-clock time for each method under equal pricing-observation
     mode (cfg.n_paths observations each).
@@ -333,13 +354,16 @@ def run_runtime_comparison() -> list[dict]:
     compute time.  This is *not* the same as the variance-reduction ratio.
     """
     import time as _time
-    seed_everything(CFG.seed)
+    cfg = CFG if cfg is None else cfg
+    n_pilot = N_PILOT if n_pilot is None else n_pilot
+    n_training = N_TRAINING if n_training is None else n_training
+    seed_everything(cfg.seed)
     rows = []
 
     # --- MC ---
     print("  [C] Timing MC...", flush=True)
     t0 = _time.perf_counter()
-    mc = standard_monte_carlo(CFG)
+    mc = standard_monte_carlo(cfg)
     mc_runtime = _time.perf_counter() - t0
     mc_est_var = mc.estimator_variance
     mc_row = make_runtime_row(
@@ -352,7 +376,7 @@ def run_runtime_comparison() -> list[dict]:
     # --- AV ---
     print("  [C] Timing AV...", flush=True)
     t0 = _time.perf_counter()
-    av = antithetic_variates(CFG)
+    av = antithetic_variates(cfg)
     av_runtime = _time.perf_counter() - t0
     rows.append(make_runtime_row(
         "C_runtime", "AV", av, av_runtime, mc_est_var, mc_runtime,
@@ -363,11 +387,11 @@ def run_runtime_comparison() -> list[dict]:
     # --- CV ---
     print("  [C] Timing CV (includes pilot)...", flush=True)
     t0 = _time.perf_counter()
-    cv = geometric_control_variate(CFG, n_pilot=N_PILOT)
+    cv = geometric_control_variate(cfg, n_pilot=n_pilot)
     cv_runtime = _time.perf_counter() - t0
     rows.append(make_runtime_row(
         "C_runtime", "CV", cv, cv_runtime, mc_est_var, mc_runtime,
-        timing_scope=f"pricing + pilot ({N_PILOT} pilot paths included)",
+        timing_scope=f"pricing + pilot ({n_pilot} pilot paths included)",
     ))
     print(f"      CV: runtime={cv_runtime:.4f}s  est_var={cv.estimator_variance:.4e}")
 
@@ -380,14 +404,14 @@ def run_runtime_comparison() -> list[dict]:
         from asian_options.payoffs import arithmetic_asian_call_payoff
         import time as _t2
 
-        train_cfg = dataclasses.replace(CFG, n_paths=N_TRAINING, seed=CFG.seed + 100)
+        train_cfg = dataclasses.replace(cfg, n_paths=n_training, seed=cfg.seed + 100)
         train_paths = simulate_paths(train_cfg)
         train_payoffs = arithmetic_asian_call_payoff(train_paths, train_cfg)
         dt = train_cfg.dt
         drift = (train_cfg.r - train_cfg.q - 0.5 * train_cfg.sigma ** 2) * dt
         diffusion = math.sqrt(dt) * train_cfg.sigma
         log_S = np.log(train_paths / train_cfg.S0)
-        log_inc = np.diff(np.hstack([np.zeros((N_TRAINING, 1)), log_S]), axis=1)
+        log_inc = np.diff(np.hstack([np.zeros((n_training, 1)), log_S]), axis=1)
         Z_train = (log_inc - drift) / diffusion
         dataset = {"X_train": Z_train, "y_train": train_payoffs}
         network = build_network(train_cfg, hidden_width=32)
@@ -397,18 +421,26 @@ def run_runtime_comparison() -> list[dict]:
 
         # Timed pricing step
         from asian_options.neural_cv import ncv_estimator
-        price_cfg = dataclasses.replace(CFG, seed=CFG.seed + 200)
+        price_cfg = dataclasses.replace(cfg, seed=cfg.seed + 200)
         t0 = _t2.perf_counter()
-        ncv = ncv_estimator(network, price_cfg, n_training_paths=N_TRAINING)
+        ncv = ncv_estimator(network, price_cfg, n_training_paths=n_training)
         ncv_pricing_runtime = _t2.perf_counter() - t0
+        include_training = timing_scope_policy == "include_ncv_training"
+        runtime_seconds = ncv_pricing_runtime + training_time if include_training else ncv_pricing_runtime
+        timing_scope = (
+            f"pricing + training ({n_training} training paths included; "
+            f"training_time={training_time:.4f}s)"
+            if include_training
+            else (
+                f"pricing only ({n_training} training paths excluded; "
+                f"training_time={training_time:.4f}s noted separately)"
+            )
+        )
 
         rows.append(make_runtime_row(
-            "C_runtime", "NCV", ncv, ncv_pricing_runtime,
+            "C_runtime", "NCV", ncv, runtime_seconds,
             mc_est_var, mc_runtime,
-            timing_scope=(
-                f"pricing only ({N_TRAINING} training paths excluded; "
-                f"training_time={training_time:.4f}s noted separately)"
-            ),
+            timing_scope=timing_scope,
         ))
         print(f"      NCV: pricing_runtime={ncv_pricing_runtime:.4f}s  "
               f"training_time={training_time:.4f}s  "
