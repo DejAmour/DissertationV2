@@ -265,3 +265,22 @@ def test_validation_profile_generation_contract(tmp_path: Path, monkeypatch: pyt
     with open(run_dir / "validation_aggregate.csv", newline="") as fh:
         agg_rows = list(csv.DictReader(fh))
     assert agg_rows
+
+    # summary_stable.csv must exclude runtime-sensitive fields so it is
+    # bit-for-bit identical across runs with the same seed and profile.
+    _runtime_fields = {"runtime_seconds", "time_per_observation", "time_per_simulated_path", "efficiency_gain_vs_mc"}
+    with open(run_dir / "summary_stable.csv", newline="") as fh:
+        stable_reader = csv.DictReader(fh)
+        stable_fieldnames = set(stable_reader.fieldnames or [])
+        stable_rows = list(stable_reader)
+    assert stable_rows, "summary_stable.csv must not be empty"
+    assert stable_fieldnames.isdisjoint(_runtime_fields), (
+        f"summary_stable.csv must not contain runtime fields; found: {stable_fieldnames & _runtime_fields}"
+    )
+
+    # merged_summary.csv must retain runtime fields for reporting purposes.
+    with open(run_dir / "merged_summary.csv", newline="") as fh:
+        merged_fieldnames = set(csv.DictReader(fh).fieldnames or [])
+    assert not merged_fieldnames.isdisjoint(_runtime_fields), (
+        "merged_summary.csv should retain runtime fields for non-stable reporting"
+    )

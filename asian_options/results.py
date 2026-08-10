@@ -119,12 +119,34 @@ METRIC_UNITS = {
     "efficiency_gain_vs_mc": "dimensionless",
 }
 
+# Columns written to summary_stable.csv.  Runtime-sensitive fields
+# (runtime_seconds, time_per_observation, time_per_simulated_path,
+# efficiency_gain_vs_mc) are intentionally excluded so that
+# summary_stable.csv is bit-for-bit identical across runs with the same
+# seed and profile.  Runtime metrics are preserved in mode_c_runtime_raw.csv,
+# merged_summary.csv, and paper_table.csv for reporting purposes.
+STABLE_PUBLICATION_COLUMNS = [
+    "method",
+    "mode",
+    "price_estimate",
+    "standard_error",
+    "observation_variance",
+    "estimator_variance",
+    "variance_reduction_ratio",
+    "pricing_observations",
+    "pricing_simulated_paths",
+    "pilot_paths",
+    "training_paths",
+    "total_simulated_paths",
+]
+
 PUBLICATION_TABLE_NOTES = """Metric notes:
 - variance_reduction_ratio = MC_observation_variance / method_observation_variance (variance metric only).
 - efficiency_gain_vs_mc = (MC_estimator_variance * MC_runtime_seconds) / (method_estimator_variance * method_runtime_seconds) (speed+precision metric).
 - AV uses 2 simulated paths per pair observation.
 - CV pilot paths and NCV training paths consume total path budget in equal-budget mode.
 - Variance reduction is not speedup; do not compare variance_reduction_ratio and efficiency_gain_vs_mc as interchangeable metrics.
+- summary_stable.csv excludes runtime fields (runtime_seconds, time_per_observation, time_per_simulated_path, efficiency_gain_vs_mc) for deterministic reproducibility; runtime metrics are reported in mode_c_runtime_raw.csv and merged_summary.csv.
 """
 
 
