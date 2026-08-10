@@ -399,19 +399,19 @@ def make_runtime_row(
     return {
         "comparison_mode": comparison_mode,
         "method": method,
-        "runtime_seconds": f"{runtime_seconds:.6f}",
+        "runtime_seconds": runtime_seconds,
         "pricing_observations": n_obs,
         "pricing_simulated_paths": n_paths,
         "pilot_paths": pilot_paths,
         "training_paths": training_paths,
         "total_simulated_paths": total_paths,
-        "price": f"{getattr(result, 'price', float('nan')):.6f}",
-        "std_error": f"{getattr(result, 'std_error', float('nan')):.6f}",
-        "observation_variance": f"{obs_var:.8e}",
-        "time_per_observation": f"{tpo:.8e}",
-        "time_per_simulated_path": f"{tpsp:.8e}",
-        "estimator_variance": f"{est_var:.8e}",
-        "efficiency_gain_vs_mc": eff_str,
+        "price": getattr(result, "price", float("nan")),
+        "std_error": getattr(result, "std_error", float("nan")),
+        "observation_variance": obs_var,
+        "time_per_observation": tpo,
+        "time_per_simulated_path": tpsp,
+        "estimator_variance": est_var,
+        "efficiency_gain_vs_mc": eff,
         "notes": "",
         "timing_scope": timing_scope,
     }
@@ -437,10 +437,15 @@ def print_runtime_table(results: Iterable[dict]) -> None:
     print("\n" + header)
     print("-" * len(header))
     for row in rows:
+        def _fmt(v, spec):
+            try:
+                return format(float(v), spec)
+            except (TypeError, ValueError):
+                return str(v)
         print("{:<6} {:>14} {:>14} {:>14} {:>20}".format(
             row.get("method", ""),
-            row.get("runtime_seconds", ""),
-            row.get("time_per_observation", ""),
-            row.get("time_per_simulated_path", ""),
-            row.get("efficiency_gain_vs_mc", ""),
+            _fmt(row.get("runtime_seconds", ""), ".6f"),
+            _fmt(row.get("time_per_observation", ""), ".8e"),
+            _fmt(row.get("time_per_simulated_path", ""), ".8e"),
+            _fmt(row.get("efficiency_gain_vs_mc", ""), ".4f"),
         ))
