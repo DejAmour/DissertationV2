@@ -23,3 +23,9 @@ handover_evidence/
 Activate.ps1
 
 asian_options_method_comparison.csv
+_tmp_handover_extract/
+handover_export/
+*.zip
+tmp/
+stage7_run*/
+asian_options_*_comparison.csv
