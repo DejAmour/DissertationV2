@@ -355,7 +355,7 @@ def run_runtime_comparison() -> list[dict]:
     av = antithetic_variates(CFG)
     av_runtime = _time.perf_counter() - t0
     rows.append(make_runtime_row(
-        "C_runtime", "AV", av, av_runtime, av.estimator_variance, mc_est_var, mc_runtime,
+        "C_runtime", "AV", av, av_runtime, mc_est_var, mc_runtime,
         timing_scope="pricing only (antithetic pair simulation + payoff)",
     ))
     print(f"      AV: runtime={av_runtime:.4f}s  est_var={av.estimator_variance:.4e}")
@@ -366,7 +366,7 @@ def run_runtime_comparison() -> list[dict]:
     cv = geometric_control_variate(CFG, n_pilot=N_PILOT)
     cv_runtime = _time.perf_counter() - t0
     rows.append(make_runtime_row(
-        "C_runtime", "CV", cv, cv_runtime, cv.estimator_variance, mc_est_var, mc_runtime,
+        "C_runtime", "CV", cv, cv_runtime, mc_est_var, mc_runtime,
         timing_scope=f"pricing + pilot ({N_PILOT} pilot paths included)",
     ))
     print(f"      CV: runtime={cv_runtime:.4f}s  est_var={cv.estimator_variance:.4e}")
@@ -404,7 +404,7 @@ def run_runtime_comparison() -> list[dict]:
 
         rows.append(make_runtime_row(
             "C_runtime", "NCV", ncv, ncv_pricing_runtime,
-            ncv.estimator_variance, mc_est_var, mc_runtime,
+            mc_est_var, mc_runtime,
             timing_scope=(
                 f"pricing only ({N_TRAINING} training paths excluded; "
                 f"training_time={training_time:.4f}s noted separately)"

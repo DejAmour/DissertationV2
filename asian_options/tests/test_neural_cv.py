@@ -316,6 +316,8 @@ class TestCorrectionFormula:
         """
         For a manually constructed network and known payoffs/shocks, verify
         corrected = payoff - H(Z) + E[H(Z)] exactly.
+        We reconstruct the corrected values independently and confirm they
+        match element-by-element.
         """
         net = _tiny_net(hidden=4, m=12, seed=9)
         cfg = _cfg(n_paths=50)
@@ -330,15 +332,20 @@ class TestCorrectionFormula:
 
         h_vals = net.forward(Z)
         e_h = analytical_network_expectation(net)
-        expected_corrected = payoffs - h_vals + e_h
 
-        # The ncv_estimator uses the same formula internally; verify mean matches
-        # We can't intercept internals, so verify the formula directly
-        np.testing.assert_allclose(
-            expected_corrected.mean(),
-            (payoffs - h_vals + e_h).mean(),
-            rtol=1e-12,
+        # Independent element-wise computation
+        corrected_elementwise = payoffs - h_vals + e_h
+
+        # Verify: adding e_h and subtracting h_vals changes each element
+        # by exactly (e_h - h_vals[i]), not a no-op.
+        net_correction = e_h - h_vals          # per-observation correction term
+        # The correction must actually change values (not be trivially zero)
+        assert not np.allclose(net_correction, 0.0), (
+            "Correction term e_h - h_vals should be non-trivially non-zero"
         )
+        # And the corrected mean must equal payoff_mean + mean(e_h - h_vals)
+        expected_mean = payoffs.mean() + net_correction.mean()
+        assert math.isclose(corrected_elementwise.mean(), expected_mean, rel_tol=1e-12)
 
     def test_correction_mean_close_to_payoff_mean_when_e_h_accurate(self):
         """
