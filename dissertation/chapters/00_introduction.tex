@@ -1,0 +1,22 @@
+This chapter introduces the dissertation topic and research framing.
+
+\section{Motivation}
+Pricing path-dependent derivatives accurately and efficiently remains central to computational finance. Arithmetic Asian options are particularly relevant in commodity and energy markets due to their payoff dependence on averaged prices, which dampens the impact of short-term spikes while increasing pricing complexity.
+
+\section{Arithmetic Asian Options}
+An arithmetic Asian option depends on the arithmetic mean of monitored underlying prices over a schedule of dates. Unlike vanilla options, no simple closed-form benchmark exists in the Black--Scholes setting for the arithmetic-average payoff, motivating simulation-based methods.
+
+\section{Monte Carlo Pricing Problem}
+Monte Carlo methods provide a flexible pricing framework under risk-neutral dynamics, but the naive estimator can exhibit high variance and slow convergence, especially when confidence-interval precision is required.
+
+\section{Variance Reduction}
+Variance reduction techniques can improve estimator efficiency without changing estimator unbiasedness. This dissertation focuses on classical approaches (antithetic and control variates) and compares them against learned control constructions.
+
+\section{Motivation for Neural Controls}
+Classical controls require analytically tractable and strongly correlated auxiliary variables. Neural control variates expand this idea by learning rich control families while enforcing analytical integrability constraints.
+
+\section{Research Question}
+The central research question is:
+\begin{quote}
+To what extent can an analytically integrable neural control variate improve pricing efficiency for arithmetic Asian options relative to classical variance reduction methods under a controlled GBM benchmark?
+\end{quote}

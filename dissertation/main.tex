@@ -1,0 +1,91 @@
+\documentclass[12pt,a4paper]{report}
+
+% Core formatting and math
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{setspace}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+
+% Figures and tables
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{siunitx}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+
+% References and hyperlinks
+\usepackage[hidelinks]{hyperref}
+\usepackage[nameinlink,capitalise,noabbrev]{cleveref}
+\usepackage[backend=biber,style=authoryear,sorting=nyt]{biblatex}
+\addbibresource{references.bib}
+
+% Appendix handling
+\usepackage[toc,page]{appendix}
+
+% Dissertation spacing
+\onehalfspacing
+
+% Graphics search path
+\graphicspath{{figures/}}
+
+\title{MSc Dissertation Title Placeholder\\\large Monte Carlo Variance Reduction for Arithmetic Asian Option Pricing}
+\author{Author Name Placeholder}
+\date{\today}
+
+\begin{document}
+
+\pagenumbering{roman}
+
+\maketitle
+
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+TODO: Add abstract.
+
+\chapter*{Acknowledgements}
+\addcontentsline{toc}{chapter}{Acknowledgements}
+TODO: Add acknowledgements.
+
+\tableofcontents
+\listoffigures
+\listoftables
+
+\clearpage
+\pagenumbering{arabic}
+
+\chapter{Introduction}
+\input{chapters/00_introduction}
+
+\chapter{Monte Carlo Pricing and Variance Reduction}
+\input{chapters/01_monte_carlo_variance_reduction}
+
+\chapter{Geometric Brownian Motion as a Commodity Pricing Benchmark}
+\input{chapters/02_gbm_commodity_benchmark}
+
+\chapter{Mathematical Methodology}
+\input{chapters/03_mathematical_methodology}
+
+\chapter{Experimental Design}
+\input{chapters/04_experimental_design}
+
+\chapter{Results}
+\input{chapters/05_results}
+
+\chapter{Discussion}
+\input{chapters/06_discussion}
+
+\chapter{Conclusion}
+\input{chapters/07_conclusion}
+
+\begin{appendices}
+\chapter{Supplementary Material}
+\input{appendices/appendix}
+\end{appendices}
+
+\printbibliography
+
+\end{document}

@@ -1,0 +1,26 @@
+\section{GBM Framework}
+Geometric Brownian motion (GBM) is used as the baseline stochastic process for controlled benchmarking.
+
+\section{Exact Discrete-Time GBM Transition}
+The exact step under GBM can be written in closed form, enabling unbiased discretisation at monitoring dates.
+
+\section{Limitations for Commodity Prices}
+Although useful as a benchmark, GBM omits several empirical commodity features.
+
+\subsection{Mean Reversion}
+Commodity spot and short-maturity forward dynamics often exhibit mean-reverting behaviour.
+
+\subsection{Jumps and Heavy Tails}
+Large discontinuous moves and non-Gaussian tails are common in energy markets.
+
+\subsection{Constant Volatility}
+GBM assumes constant volatility, whereas commodity volatility is typically time-varying and regime-dependent.
+
+\subsection{Seasonality}
+Many commodity markets exhibit deterministic and stochastic seasonal patterns not represented by GBM.
+
+\section{Brent Crude Empirical Evidence}
+Existing repository analysis on Brent crude is used to contextualise where GBM is adequate and where it is insufficient empirically.
+
+\section{Benchmark Positioning}
+In this dissertation, GBM is treated as a controlled benchmark for variance-reduction comparison, not as a complete structural model of commodity prices.

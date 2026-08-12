@@ -1,0 +1,5 @@
+$pdf_mode = 1;
+$out_dir = 'build';
+$aux_dir = 'build';
+$bibtex_use = 2;
+$clean_ext .= ' %R.run.xml %R.bcf %R.blg %R.fls %R.fdb_latexmk %R.synctex.gz';

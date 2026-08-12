@@ -1,0 +1,23 @@
+\section{Risk-Neutral Valuation}
+Under risk-neutral pricing, the time-0 option value is the discounted expectation of payoff under the risk-neutral measure.
+
+\section{Standard Monte Carlo}
+A standard Monte Carlo estimator simulates independent paths, evaluates discounted payoffs, and averages across samples.
+
+\section{Convergence and Standard Error}
+The estimator converges at rate $\mathcal{O}(N^{-1/2})$, with standard error estimated via sample variance.
+
+\section{Antithetic Variates}
+Antithetic pairing introduces negatively correlated samples by reusing Gaussian draws with opposite signs to reduce variance.
+
+\section{Control Variates}
+Control variates exploit covariance with a known-expectation variable to reduce estimator variance through an optimally chosen coefficient.
+
+\section{Arithmetic and Geometric Asian Options}
+For Asian options, the geometric-average counterpart is analytically tractable in Black--Scholes and provides a natural classical control for the arithmetic-average payoff.
+
+\section{Dimensionality and Limitations of Classical Controls}
+Classical controls are effective when strong correlations and tractable moments are available, but performance can deteriorate in high-dimensional or misspecified settings.
+
+\section{Neural and Automatic Control Variates}
+Neural/automatic control variates parameterise control families and fit them from data, aiming to capture structure beyond hand-crafted controls while preserving unbiasedness constraints.

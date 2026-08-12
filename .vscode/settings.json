@@ -1,0 +1,24 @@
+{
+  "latex-workshop.latex.autoBuild.run": "onSave",
+  "latex-workshop.latex.outDir": "%DIR%/build",
+  "latex-workshop.latex.tools": [
+    {
+      "name": "latexmk",
+      "command": "latexmk",
+      "args": [
+        "-pdf",
+        "-interaction=nonstopmode",
+        "-synctex=1",
+        "%DOC%"
+      ]
+    }
+  ],
+  "latex-workshop.latex.recipes": [
+    {
+      "name": "latexmk (biber)",
+      "tools": ["latexmk"]
+    }
+  ],
+  "latex-workshop.latex.rootFile.useSubFile": false,
+  "latex-workshop.view.pdf.viewer": "tab"
+}

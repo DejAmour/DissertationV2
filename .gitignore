@@ -29,3 +29,17 @@ handover_export/
 tmp/
 stage7_run*/
 asian_options_*_comparison.csv
+
+# LaTeX dissertation build artifacts
+dissertation/build/
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
