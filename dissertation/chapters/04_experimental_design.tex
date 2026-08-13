@@ -1,32 +1,444 @@
-\section{Estimator Comparisons}
-Define which estimators are compared and the metrics used.
+\section{Objectives}
 
-\section{Validation Strategy}
-Describe validation checks for implementation correctness and stability.
+The experiments are designed to separate three questions that could otherwise be confused.
 
-\section{Parameter Grid}
-Specify the parameter grid over strike, maturity, monitoring frequency, and volatility settings as applicable.
+The first is statistical:
 
-\section{Data Splits and Sampling Design}
-Use independent training, validation, pilot, and pricing samples to avoid leakage.
+\begin{quote}
+How much variance does each method remove?
+\end{quote}
 
-\section{Equal-Observation Comparison}
-Compare methods under matched path counts.
+The second is computational:
 
-\section{Equal-Total-Path-Budget Comparison}
-Compare methods under matched total simulation budget including training overhead.
+\begin{quote}
+How much time or simulation effort is required to achieve a given level of accuracy?
+\end{quote}
 
-\section{Runtime Comparison}
-Record wall-clock timing and computational overheads.
+The third concerns transfer:
 
-\section{Variance Reduction, Standard Errors, and Confidence Intervals}
-Report uncertainty metrics consistently across methods.
+\begin{quote}
+Can the training cost of the neural method be spread across multiple related option valuations?
+\end{quote}
 
-\section{Transfer and Fine-Tuning}
-Evaluate pretrained controls under transfer across nearby contract parameters.
+The experiments therefore do not rank methods solely according to the smallest estimator variance.
 
-\section{Amortised Training Cost and Break-Even Analysis}
-Assess when upfront training cost is recouped over repeated pricing tasks.
+\section{Benchmark Estimators}
+
+The following methods will be compared.
+
+\subsection{Standard Monte Carlo}
+
+Standard Monte Carlo provides the unreduced benchmark against which the other estimators are compared.
+
+\subsection{Antithetic Variates}
+
+Antithetic variates provide a simple and low-cost classical variance reduction benchmark.
+
+\subsection{Geometric Asian Control Variate}
+
+The geometric Asian control provides the principal classical control-variate benchmark. It is particularly demanding because its expectation is analytical and its payoff is closely related to that of the arithmetic Asian option.
+
+\subsection{Contract-Specific Neural Control Variate}
+
+A new neural network is trained for one particular option specification.
+
+This tests the benefit obtainable from the neural approach when transferability is ignored.
+
+\subsection{Pretrained Neural Control Variate}
+
+One parameterised network is trained across a distribution of option parameters and then frozen.
+
+This tests whether a single training cost can be amortised across subsequent valuations.
+
+\subsection{Fine-Tuned Pretrained Neural Control Variate}
+
+The pretrained network is updated using a smaller sample from the target contract.
+
+This tests whether limited adaptation can recover much of the performance of contract-specific training at lower cost.
+
+\subsection{Combined Geometric and Neural Control}
+
+A final experiment can use both the geometric Asian control and neural control.
+
+The purpose is not simply to provide another estimator. It tests whether the network learns variation that remains after the strong geometric control has already been applied.
+
+If the neural network adds little to the geometric control, this is itself an economically meaningful result.
+
+\section{Contract Parameter Grid}
+
+The initial experiments keep the number of monitoring dates fixed at twelve.
+
+Moneyness will be varied using
+
+\begin{equation}
+\frac{K}{S_0}
+\in
+\{
+0.8,
+0.9,
+1.0,
+1.1,
+1.2
+\}.
+\end{equation}
+
+Volatility will be varied using
+
+\begin{equation}
+\sigma
+\in
+\{
+0.10,
+0.20,
+0.30,
+0.40,
+0.50
+\}.
+\end{equation}
+
+Maturity will be varied over
+
+\begin{equation}
+T
+\in
+\{
+0.5,
+1.0,
+2.0
+\}
+\end{equation}
+
+years.
+
+A baseline risk-free rate will initially be held fixed so that the principal variation comes from moneyness, volatility and maturity. The rate can subsequently be included in the conditioning vector if it is useful to test an additional source of parameter variation.
+
+The parameter combinations provide both relatively easy and more difficult option-pricing environments.
+
+Separate experiments will distinguish between interpolation and extrapolation.
+
+Interpolation points are parameter combinations not observed during training but lying inside the ranges used to train the parameterised network.
+
+Extrapolation points lie outside the training range.
+
+This distinction is important because good interpolation performance does not imply that a neural control can safely be reused for substantially different contracts.
+
+\section{Data Separation}
+
+The simulations used at different stages of the experiment will be generated independently.
+
+The principal samples are:
+
+\begin{enumerate}[label=\arabic*.]
+
+\item a training sample, used to update the neural-network weights;
+
+\item a validation sample, used to monitor generalisation and make training decisions;
+
+\item a control-coefficient or pilot sample, used where a regression coefficient such as \(\beta\) must be estimated;
+
+\item a final pricing sample, used only to calculate the reported option estimate and sampling statistics.
+
+\end{enumerate}
+
+Independent random seeds will be used for these stages.
+
+This separation ensures that the performance reported for the final estimator is genuinely out of sample.
+
+\section{Validation Before Comparison}
+
+Before evaluating variance reduction, the underlying simulator and payoff calculations must be validated.
+
+The GBM simulator will first be used to price a European call for which the Black-Scholes analytical value is known. Monte Carlo estimates should converge towards the analytical value as the simulation budget increases.
+
+The geometric Asian payoff and analytical expectation will then be tested independently. A large Monte Carlo simulation of the geometric payoff should agree with the closed-form value within sampling error.
+
+The automatic neural expectation will also be validated numerically. After freezing a trained network, the analytical value
+
+\begin{equation}
+\mathbb{E}[H(Z)]
+\end{equation}
+
+can be compared with a large independent Monte Carlo estimate of the network output.
+
+This Monte Carlo calculation is used only as a validation test. It is not used to construct the final NCV estimator.
+
+These checks are important because an apparent reduction in estimator variance is meaningless if it is produced by an incorrectly implemented expectation or payoff.
+
+\section{Comparison Under Equal Computational Budgets}
+
+Variance reduction methods incur different costs, so no single comparison is sufficient.
+
+Three views will therefore be reported.
+
+\subsection{Equal Pricing Observations}
+
+Each method receives the same number of observations entering its final pricing estimator.
+
+This isolates statistical efficiency.
+
+\subsection{Equal Total Simulated-Path Budget}
+
+Training paths and additional antithetic or pilot paths are included where appropriate.
+
+This provides a more realistic comparison of simulation effort.
+
+\subsection{Runtime Efficiency}
+
+Wall-clock time will be measured separately for:
+
+\begin{itemize}
+
+\item simulation;
+
+\item training;
+
+\item neural inference;
+
+\item analytical control calculations; and
+
+\item total estimation.
+
+\end{itemize}
+
+The distinction between online and offline cost will also be retained for the pretrained network. Training is incurred once, while inference is incurred for every subsequent valuation.
+
+\section{Performance Metrics}
+
+For each method the following quantities will be reported:
+
+\begin{equation}
+\widehat V,
+\end{equation}
+
+the estimated option value;
+
+\begin{equation}
+\widehat{\operatorname{Var}},
+\end{equation}
+
+the variance of the corrected payoff or estimator;
+
+\begin{equation}
+SE,
+\end{equation}
+
+the estimated standard error; and the associated 95 per cent confidence interval.
+
+Variance reduction relative to standard Monte Carlo will be measured using
+
+\begin{equation}
+VRR
+=
+\frac{
+\operatorname{Var}(Y_{MC})
+}{
+\operatorname{Var}(Y_{\mathrm{method}})
+}.
+\end{equation}
+
+A value larger than one indicates variance reduction.
+
+Runtime must also be considered. One possible combined measure is
+
+\begin{equation}
+\operatorname{Var}
+\times
+\text{runtime}.
+\end{equation}
+
+The results will also be reported separately so that this summary measure does not obscure the source of a performance difference.
+
+Repeated independent experiments will be used to assess estimator bias and confidence-interval coverage.
+
+Where practical, performance will also be expressed as the computational time required to achieve a specified target RMSE or standard error.
+
+\section{Training Diagnostics}
+
+For neural estimators, the following training information will be recorded:
+
+\begin{itemize}
+
+\item training MSE;
+
+\item validation MSE;
+
+\item number of epochs;
+
+\item batch size;
+
+\item learning rate;
+
+\item optimiser;
+
+\item training duration; and
+
+\item final network architecture.
+
+\end{itemize}
+
+Training and validation loss will be examined together.
+
+A declining training loss accompanied by a rising validation loss will be treated as evidence of overfitting rather than improved control-variate performance.
+
+The primary criterion is ultimately the out-of-sample residual variance
+
+\begin{equation}
+\operatorname{Var}
+\left[
+f(Z)-H(Z)
+\right],
+\end{equation}
+
+not training loss alone.
+
+\section{Transfer Experiments}
+
+The pretrained network will be evaluated in three settings.
+
+First, the network will be tested on parameter combinations represented during training.
+
+Second, it will be tested on unseen combinations lying within the training ranges.
+
+Third, selected points outside the training range will be used to examine extrapolation.
+
+For each target contract, the frozen pretrained network is compared with a network trained from scratch.
+
+A limited fine-tuning experiment then allows the pretrained weights to adapt using a smaller target-specific sample.
+
+This produces three neural training regimes:
+
+\begin{equation}
+\text{from scratch},
+\end{equation}
+
+\begin{equation}
+\text{pretrained and frozen},
+\end{equation}
+
+and
+
+\begin{equation}
+\text{pretrained and fine-tuned}.
+\end{equation}
+
+The comparison allows the source of any computational advantage to be identified.
+
+If the frozen network performs almost as well as contract-specific training, direct transfer is successful.
+
+If fine-tuning is required but only a small training sample is needed, pretraining may still reduce cost.
+
+If full retraining is required for each new option, the economic case for pretraining becomes substantially weaker.
+
+\section{Amortisation and Break-Even Analysis}
+
+The cost of a pretrained model should not necessarily be assigned entirely to one valuation.
+
+Let
+
+\begin{equation}
+C_{\mathrm{train}}
+\end{equation}
+
+denote the one-off cost of pretraining,
+
+\begin{equation}
+C_{\mathrm{NCV}}
+\end{equation}
+
+the cost of one subsequent NCV valuation, and
+
+\begin{equation}
+C_{\mathrm{benchmark}}
+\end{equation}
+
+the cost of obtaining the same target accuracy using the best classical benchmark.
+
+After $Q$ related valuations, the approximate average cost per neural valuation is
+
+\begin{equation}
+\overline{C}_{\mathrm{NCV}}(Q)
+=
+\frac{
+C_{\mathrm{train}}
+}{
+Q
+}
++
+C_{\mathrm{NCV}}.
+\end{equation}
+
+The break-even number of valuations is the smallest $Q$ for which
+
+\begin{equation}
+\frac{
+C_{\mathrm{train}}
+}{
+Q
+}
++
+C_{\mathrm{NCV}}
+\leq
+C_{\mathrm{benchmark}}.
+\end{equation}
+
+If
+
+\begin{equation}
+C_{\mathrm{benchmark}}
+>
+C_{\mathrm{NCV}},
+\end{equation}
+
+this can be rearranged to give
+
+\begin{equation}
+Q
+\geq
+\frac{
+C_{\mathrm{train}}
+}{
+C_{\mathrm{benchmark}}
+-
+C_{\mathrm{NCV}}
+}.
+\end{equation}
+
+This quantity provides a direct interpretation of the practical value of pretraining.
+
+A neural method that is inefficient for one isolated valuation may become useful if the same network is reused across a sufficiently large book of related contracts. Conversely, if the break-even number is unrealistically large, lower estimator variance alone would not justify its use.
 
 \section{Reproducibility}
-Document seeds, software versions, and deterministic controls where feasible.
+
+All final comparisons will use repeated independent random seeds rather than relying on a single Monte Carlo run.
+
+Simulation settings, training parameters and random seeds will be stored alongside the results.
+
+The same underlying contract specifications will be used when comparing methods, and where appropriate common random numbers will be used to reduce noise in direct method comparisons without altering the marginal estimator distributions.
+
+Numerical improvements will not be inferred from individual runs. Claims regarding variance reduction, runtime or superiority of one method will be based on the completed repeated experiments.
+
+\section{Expected Contribution of the Experiments}
+
+No variance reduction result is assumed in advance.
+
+The geometric Asian control may remain superior once computational cost is included. This would not represent a failure of the study. The strength of the geometric control under GBM creates a demanding benchmark and allows the limits of the neural approach to be identified.
+
+The main potential contribution of the pretrained NCV lies in settings where training can be reused. The experimental design therefore separates the best contract-specific neural result from the performance of a transferable control.
+
+The results in the following chapter will determine:
+
+\begin{enumerate}[label=\arabic*.]
+
+\item whether a contract-specific NCV materially reduces variance beyond classical methods;
+
+\item whether a pretrained network transfers across related arithmetic Asian options;
+
+\item whether fine-tuning is required;
+
+\item whether a neural control adds information after the geometric Asian control has been applied; and
+
+\item whether any statistical improvement survives once training and inference costs are included.
+
+\end{enumerate}
+
+These questions provide the basis for evaluating not only whether neural control variates work mathematically, but whether they offer a credible computational advantage for repeated option-pricing problems.

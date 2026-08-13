@@ -1,26 +1,262 @@
-\section{GBM Framework}
-Geometric Brownian motion (GBM) is used as the baseline stochastic process for controlled benchmarking.
+\section{Geometric Brownian Motion}
 
-\section{Exact Discrete-Time GBM Transition}
-The exact step under GBM can be written in closed form, enabling unbiased discretisation at monitoring dates.
+The Black-Scholes framework assumes that the underlying asset follows geometric Brownian motion. Under the risk-neutral measure, a simplified non-dividend-paying specification is
+
+\begin{equation}
+dS_t
+=
+rS_t,dt
++
+\sigma S_t,dW_t,
+\end{equation}
+
+where $r$ is the risk-free rate, $\sigma$ is constant volatility and $W_t$ is a standard Brownian motion under $\mathbb{Q}$.
+
+For commodity applications, the drift may instead reflect the appropriate net cost of carry. The simplified specification above is retained for the controlled benchmark and validation experiments.
+
+The solution to the stochastic differential equation is
+
+\begin{equation}
+S_t
+=
+S_0
+\exp
+\left[
+\left(
+r-\frac{1}{2}\sigma^2
+\right)t
++
+\sigma W_t
+\right].
+\end{equation}
+
+Over a discrete time interval $\Delta t$, this gives the exact transition
+
+\begin{equation}
+S_{t+\Delta t}
+=
+S_t
+\exp
+\left[
+\left(
+r-\frac{1}{2}\sigma^2
+\right)\Delta t
++
+\sigma\sqrt{\Delta t}Z
+\right],
+\end{equation}
+
+where
+
+\begin{equation}
+Z\sim\mathcal{N}(0,1).
+\end{equation}
+
+This is an exact discrete-time transition of GBM rather than an Euler approximation.
+
+GBM produces strictly positive and continuous price paths, normally distributed log returns and constant instantaneous volatility. These properties make the model easy to simulate and analytically convenient. They also impose assumptions that are difficult to reconcile with several features of commodity markets.
 
 \section{Limitations for Commodity Prices}
-Although useful as a benchmark, GBM omits several empirical commodity features.
 
 \subsection{Mean Reversion}
-Commodity spot and short-maturity forward dynamics often exhibit mean-reverting behaviour.
+
+GBM contains no mechanism that pulls prices towards a long-run equilibrium level. A large positive price shock permanently changes the level from which the future process evolves.
+
+Physical commodities can display economic forces that create mean-reverting behaviour. High prices may encourage additional production, reduce consumption or lead to inventory release, while low prices can discourage production and stimulate demand.
+
+A simple mean-reverting log-price process can be represented as
+
+\begin{equation}
+dX_t
+=
+\kappa(\alpha-X_t)dt
++
+\sigma dW_t,
+\end{equation}
+
+where
+
+\begin{equation}
+X_t
+=
+\log S_t,
+\end{equation}
+
+$\alpha$ is the long-run log-price level and $\kappa$ controls the rate of mean reversion.
+
+Such dynamics can be important for path-dependent derivatives because the effect of an early shock on subsequent monitoring dates differs from that under GBM.
 
 \subsection{Jumps and Heavy Tails}
-Large discontinuous moves and non-Gaussian tails are common in energy markets.
+
+GBM produces continuous sample paths and Gaussian log returns. Commodity prices can move abruptly in response to geopolitical events, weather, outages and supply disruptions.
+
+Jump models provide one mechanism for representing these changes. A simple jump-diffusion model can be written as
+
+\begin{equation}
+\frac{dS_t}{S_{t^-}}
+=
+\mu,dt
++
+\sigma,dW_t
++
+(J-1)dN_t,
+\end{equation}
+
+where $N_t$ is a Poisson counting process and $J$ determines the proportional jump size.
+
+The relevance for option pricing arises from the nonlinear payoff. Extreme observations that appear infrequently in the underlying distribution can still have a disproportionate influence on option values, particularly for out-of-the-money contracts or path-dependent averages.
 
 \subsection{Constant Volatility}
-GBM assumes constant volatility, whereas commodity volatility is typically time-varying and regime-dependent.
 
-\subsection{Seasonality}
-Many commodity markets exhibit deterministic and stochastic seasonal patterns not represented by GBM.
+The volatility parameter in GBM is constant. Conditional return variance therefore depends on the length of the interval but not on the current state of the market.
 
-\section{Brent Crude Empirical Evidence}
-Existing repository analysis on Brent crude is used to contextualise where GBM is adequate and where it is insufficient empirically.
+Commodity volatility is visibly less stable. Periods of relatively small price changes can be followed by episodes of severe uncertainty and large movements. A single constant-volatility parameter cannot reproduce this behaviour.
 
-\section{Benchmark Positioning}
-In this dissertation, GBM is treated as a controlled benchmark for variance-reduction comparison, not as a complete structural model of commodity prices.
+This matters for the present study because variance reduction performance is itself distribution-dependent. A control that works exceptionally well under a smooth constant-volatility diffusion may not perform similarly in a model containing volatility clustering or jumps.
+
+\subsection{Seasonality and Other Commodity Features}
+
+Commodity prices can also display seasonal patterns. Natural gas demand is affected by heating requirements, electricity demand varies through the day and year, and refined-product markets can exhibit seasonal changes in consumption.
+
+Standard GBM has no explicit mechanism for such deterministic calendar effects.
+
+GBM should therefore not be interpreted as a universal commodity price model. Its role in this dissertation is narrower. It provides a transparent environment in which the Monte Carlo estimators can be implemented, validated and compared before considering whether the conclusions are likely to generalise.
+
+\section{Empirical Assessment Using Brent Crude Oil}
+
+To examine these limitations empirically, daily Europe Brent Spot Price FOB data were obtained from the US Energy Information Administration through the Federal Reserve Economic Data database under the identifier DCOILBRENTEU.
+
+The sample runs from 4 January 2000 to 31 December 2025 and contains 6,599 valid price observations. Missing observations were not interpolated and returns were not trimmed or winsorised.
+
+Most actively traded Brent options are written on futures rather than the spot price. The spot data are therefore used here to examine historical commodity behaviour rather than to estimate risk-neutral pricing parameters directly.
+
+Daily continuously compounded returns were calculated as
+
+\begin{equation}
+r_t
+=
+\log
+\left(
+\frac{S_t}{S_{t-1}}
+\right).
+\end{equation}
+
+This produced 6,598 return observations.
+
+Annualised volatility was calculated using
+
+\begin{equation}
+\widehat{\sigma}_{\mathrm{annual}}
+=
+\widehat{\sigma}_{\mathrm{daily}}
+\sqrt{252}.
+\end{equation}
+
+Table \ref{tab:brent_stats} summarises the main descriptive statistics.
+
+\begin{table}[htbp]
+\centering
+\caption{Brent crude oil return statistics}
+\label{tab:brent_stats}
+\begin{tabular}{lccc}
+\toprule
+Statistic
+& Full Sample
+& 2010--2019
+& COVID-19 Stress Period \\
+\midrule
+Price observations
+& 6,599
+& 2,530
+& 103 \\
+
+    Return observations
+    & 6,598
+    & 2,529
+    & 102 \\
+
+    Mean daily return
+    & 0.0143\%
+    & -0.0061\%
+    & -0.2548\% \\
+
+    Annualised volatility
+    & 41.32\%
+    & 30.32\%
+    & 176.01\% \\
+
+    Skewness
+    & -1.94
+    & 0.19
+    & -1.49 \\
+
+    Excess kurtosis
+    & 76.37
+    & 2.77
+    & 12.61 \\
+    \bottomrule
+\end{tabular}
+
+\end{table}
+
+The full sample displayed an annualised volatility of 41.32 per cent, compared with 30.32 per cent over the 2010--2019 comparison period. During the COVID-19 stress period, annualised volatility increased to 176.01 per cent.
+
+The distribution also departed materially from normality. Full-sample skewness was $-1.94$, while excess kurtosis was 76.37. Even during the less extreme 2010--2019 period, excess kurtosis remained 2.77.
+
+The Jarque-Bera test strongly rejected normality. Returns more than three standard deviations from the mean occurred on approximately 0.97 per cent of full-sample days. Under a normal distribution the corresponding probability is approximately 0.27 per cent.
+
+Volatility was also highly unstable through time. Thirty-day annualised volatility ranged from approximately 9.22 per cent to 297.24 per cent, with a median of 31.10 per cent.
+
+The first-order autocorrelation of squared returns was approximately
+
+\begin{equation}
+\operatorname{Corr}
+(r_t^2,r_{t-1}^2)
+=
+0.364,
+\end{equation}
+
+while the first-order autocorrelation of raw returns was close to zero,
+
+\begin{equation}
+\operatorname{Corr}
+(r_t,r_{t-1})
+=
+-0.006.
+\end{equation}
+
+The contrast is informative. There is relatively little evidence of simple first-order predictability in return direction, but considerably stronger evidence that the conditional scale of returns changes through time.
+
+An AR$1$ model for the logarithm of Brent prices can be written as
+
+\begin{equation}
+\log S_t
+=
+c
++
+\phi \log S_{t-1}
++
+\varepsilon_t.
+\end{equation}
+
+The estimated coefficient was approximately
+
+\begin{equation}
+\widehat{\phi}
+=
+0.9983.
+\end{equation}
+
+Augmented Dickey-Fuller tests did not robustly reject the unit-root null at the 5 per cent significance level. The historical data therefore provide much stronger evidence against the constant-volatility and Gaussian-return assumptions of GBM than against its lack of mean reversion.
+
+\section{Implications for the Dissertation}
+
+The Brent evidence does not imply that GBM is useless. Several features remain convenient. Prices are positive, directional return autocorrelation is weak and the model is simple enough to simulate exactly at discrete monitoring dates.
+
+Its distributional assumptions are less convincing. Brent returns display heavy tails and volatility that changes markedly between market regimes.
+
+The empirical evidence therefore supports using GBM as a benchmark model rather than a complete commodity model.
+
+This distinction is important for interpreting the subsequent results. If a neural control variate performs well under GBM, this establishes that the method has been implemented successfully in a controlled environment. It does not by itself establish that the same efficiency improvement would be obtained under stochastic volatility, jumps or other commodity-specific dynamics.
+
+The central experiments consequently remain focused on the arithmetic Asian option under GBM. More realistic stochastic dynamics can then be considered as an extension or as future research rather than being introduced before the behaviour of the variance reduction methods is properly understood.
