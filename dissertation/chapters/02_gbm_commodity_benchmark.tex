@@ -5,9 +5,9 @@ The Black-Scholes framework assumes that the underlying asset follows geometric 
 \begin{equation}
 dS_t
 =
-rS_t,dt
+rS_t\,dt
 +
-\sigma S_t,dW_t,
+\sigma S_t\,dW_t,
 \end{equation}
 
 where $r$ is the risk-free rate, $\sigma$ is constant volatility and $W_t$ is a standard Brownian motion under $\mathbb{Q}$.
@@ -95,9 +95,9 @@ Jump models provide one mechanism for representing these changes. A simple jump-
 \begin{equation}
 \frac{dS_t}{S_{t^-}}
 =
-\mu,dt
+\mu\,dt
 +
-\sigma,dW_t
+\sigma\,dW_t
 +
 (J-1)dN_t,
 \end{equation}
@@ -227,7 +227,7 @@ while the first-order autocorrelation of raw returns was close to zero,
 
 The contrast is informative. There is relatively little evidence of simple first-order predictability in return direction, but considerably stronger evidence that the conditional scale of returns changes through time.
 
-An AR$1$ model for the logarithm of Brent prices can be written as
+An AR(1) model for the logarithm of Brent prices can be written as
 
 \begin{equation}
 \log S_t
