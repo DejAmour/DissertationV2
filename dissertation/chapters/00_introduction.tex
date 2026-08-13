@@ -1,22 +1,41 @@
-This chapter introduces the dissertation topic and research framing.
+An option is a derivative whose value depends on the behaviour of an underlying asset. The underlying may be an equity, index, interest rate, commodity or another financial instrument, and each asset class presents different modelling and pricing challenges. The simplest example is the European option, which gives its holder the right, but not the obligation, to buy or sell an underlying asset at a predetermined strike price on a specified future date.
 
-\section{Motivation}
-Pricing path-dependent derivatives accurately and efficiently remains central to computational finance. Arithmetic Asian options are particularly relevant in commodity and energy markets due to their payoff dependence on averaged prices, which dampens the impact of short-term spikes while increasing pricing complexity.
+Options have a wide range of applications in financial markets. They can be used to hedge existing exposures, manage portfolio risk or take views on future price movements. In commodity markets these functions are particularly important because producers, consumers and trading firms are exposed not only to financial price risk but also to uncertainty surrounding the production, purchase and delivery of physical commodities.
 
-\section{Arithmetic Asian Options}
-An arithmetic Asian option depends on the arithmetic mean of monitored underlying prices over a schedule of dates. Unlike vanilla options, no simple closed-form benchmark exists in the Black--Scholes setting for the arithmetic-average payoff, motivating simulation-based methods.
+For a European option under the assumptions of Black and Scholes, the underlying asset follows geometric Brownian motion and the option price can be written in closed form. The terminal asset price is lognormally distributed and the payoff depends only on that terminal value. This degree of analytical tractability does not extend to many more complicated derivatives.
 
-\section{Monte Carlo Pricing Problem}
-Monte Carlo methods provide a flexible pricing framework under risk-neutral dynamics, but the naive estimator can exhibit high variance and slow convergence, especially when confidence-interval precision is required.
+An important example is the Asian option, whose payoff depends on an average of the underlying price over a collection of monitoring dates. Such averaging is particularly relevant in commodity markets, where commercial exposures are often determined by prices observed throughout a delivery period rather than on one particular settlement date. For an arithmetic Asian option, however, the arithmetic mean of correlated lognormal prices does not itself have a convenient known distribution. A general closed-form pricing formula is therefore unavailable even when the underlying follows geometric Brownian motion.
 
-\section{Variance Reduction}
-Variance reduction techniques can improve estimator efficiency without changing estimator unbiasedness. This dissertation focuses on classical approaches (antithetic and control variates) and compares them against learned control constructions.
+Numerical methods are consequently required. Monte Carlo simulation is particularly suitable because it allows an option price to be represented as an expectation and approximated by averaging payoffs generated from simulated price paths. The method is flexible and its convergence rate does not depend directly on the dimensionality of the underlying integration problem. This makes it useful for path-dependent derivatives in which many random variables are required to construct each simulated path.
 
-\section{Motivation for Neural Controls}
-Classical controls require analytically tractable and strongly correlated auxiliary variables. Neural control variates expand this idea by learning rich control families while enforcing analytical integrability constraints.
+The disadvantage is slow statistical convergence. The standard error of the Monte Carlo estimator declines at the rate
 
-\section{Research Question}
-The central research question is:
+\begin{equation}
+N^{-1/2},
+\end{equation}
+
+where $N$ denotes the number of independent simulations. Halving the statistical error therefore requires approximately four times as many simulations. Where a derivative is repeatedly valued across different parameter combinations, this computational cost can become significant.
+
+Variance reduction techniques attempt to improve this trade-off. Antithetic variates introduce dependence between paired simulation paths in an attempt to offset extreme outcomes. Control variates instead use information from a correlated quantity whose expectation is already known. Both methods can substantially reduce Monte Carlo variance while preserving the quantity being estimated.
+
+For arithmetic Asian options under geometric Brownian motion, the corresponding geometric Asian option provides an unusually strong classical control variate. The geometric average of lognormal prices remains lognormal, allowing the geometric Asian option to be valued analytically. Since the geometric and arithmetic averages are generally highly correlated, this provides a cheap and effective benchmark against which more complicated variance reduction techniques should be judged.
+
+The requirement that a control variate has a known expectation is also its main restriction. For derivatives with more complicated path dependence, more realistic stochastic dynamics or several underlying risk factors, a strong analytically tractable control may not exist. This motivates the use of learned control variates.
+
+The automatic control variate considered in this dissertation uses a shallow neural network to learn a function that moves closely with the target payoff. A neural network would not ordinarily be suitable as a conventional control variate because its expectation is generally unknown. The architecture used here is therefore deliberately restricted. With Gaussian inputs, a single hidden layer and a ReLU activation function, the expectation of the trained network can be calculated analytically. The network can then enter the Monte Carlo estimator in the same way as a conventional control variate.
+
+This creates an important practical trade-off. A neural control variate may be more flexible than a manually selected analytical control, but the network must first be trained. A lower estimator variance does not automatically imply a lower computational cost once training and inference are included. This is particularly relevant for an arithmetic Asian option, where the geometric Asian control already provides a strong and inexpensive benchmark.
+
+The potential value of the neural approach may therefore lie in reusability. If one network can be trained across a family of related option contracts and then reused for subsequent valuations, its initial training cost can be spread across many pricing problems. This changes the relevant question from whether a neural network can reduce variance for one option to whether the reduction is sufficiently transferable and computationally efficient to justify training it.
+
+The primary research question of this dissertation is therefore:
+
 \begin{quote}
-To what extent can an analytically integrable neural control variate improve pricing efficiency for arithmetic Asian options relative to classical variance reduction methods under a controlled GBM benchmark?
+\textit{Under what conditions can a pretrained neural control variate improve the statistical and computational efficiency of Monte Carlo pricing for arithmetic Asian options relative to antithetic variates and a geometric Asian control variate?}
 \end{quote}
+
+The analysis considers several related questions. First, the performance of a neural control variate trained for an individual contract is compared with standard Monte Carlo and classical variance reduction techniques. Second, a parameterised neural control variate is considered across different strikes, volatilities and maturities. Third, the ability of a pretrained network to price unseen parameter combinations without retraining is examined. Finally, statistical improvements are evaluated alongside training and inference costs in order to estimate how many repeated valuations are required before pretraining becomes economically worthwhile.
+
+Geometric Brownian motion is used as the primary stochastic model. This is not intended as a claim that GBM provides a complete description of commodity prices. Historical Brent crude oil data examined in this dissertation exhibit heavy tails and large changes in volatility that are inconsistent with its assumptions. GBM is instead useful because it provides a transparent and controlled environment in which the pricing and variance reduction algorithms can first be validated.
+
+The dissertation proceeds as follows. Chapter 1 reviews Monte Carlo pricing, classical variance reduction, Asian options and the motivation for neural control variates. Chapter 2 considers the limitations of geometric Brownian motion for commodity prices and uses Brent crude oil data to motivate the distinction between a tractable benchmark and a realistic empirical model. Chapter 3 develops the mathematical methodology, including the arithmetic Asian payoff, geometric Asian control and analytically integrable neural control variate. Chapter 4 sets out the experimental design used to compare statistical and computational performance. The subsequent chapters present and discuss the empirical results.
