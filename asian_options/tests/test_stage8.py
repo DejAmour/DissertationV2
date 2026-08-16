@@ -37,6 +37,8 @@ def _base_success_row(rep: int, cid: str, method: str) -> dict:
         "beta": float("nan"),
         "corr_f_c0": float("nan"),
         "hash_verified": "",
+        "ncv_epoch": 25 if method.startswith("NCV") else "NA",
+        "ncv_epoch_source": "training_curve_validation_tuning" if method.startswith("NCV") else "NA",
         "error": "",
     }
 
@@ -219,6 +221,53 @@ def test_matched_accuracy_ceiling_formula():
     assert n == math.ceil(10.0 / (0.1 ** 2))
 
 
+def test_stage8_fixed_epoch_and_source_constants():
+    assert s8.STAGE8_FIXED_NCV_EPOCH == 25
+    assert s8.STAGE8_NCV_EPOCH_SOURCE == "training_curve_validation_tuning"
+    row = s8._replication_base_row(42, 0, "reference", "NCV_SCRATCH")
+    assert row["ncv_epoch"] == 25
+    assert row["ncv_epoch_source"] == "training_curve_validation_tuning"
+
+
+def test_training_curve_and_final_seed_namespaces_are_disjoint():
+    assert s8.seed_namespaces_are_disjoint(base_seed=42, replication=0) is True
+    assert s8.seed_namespaces_are_disjoint(base_seed=42, replication=3) is True
+
+
+def test_matched_accuracy_cost_fields_use_end_to_end_pricing_and_setup_once():
+    aggregate = [
+        {"contract_id": "reference", "method": "MC", "mean_observation_variance": 4.0, "pricing_observations_mean": 100, "pricing_runtime_s_median": 10.0},
+        {"contract_id": "reference", "method": "AV", "mean_observation_variance": 2.0, "pricing_observations_mean": 100, "pricing_runtime_s_median": 12.0},
+        {"contract_id": "reference", "method": "GCV", "mean_observation_variance": 1.0, "mean_reported_estimator_standard_error": 0.1, "pricing_observations_mean": 100, "pilot_runtime_s_median": 5.0, "pricing_runtime_s_median": 4.0},
+        {"contract_id": "reference", "method": "NCV_SCRATCH", "mean_observation_variance": 1.5, "mean_reported_estimator_standard_error": 0.12, "pricing_observations_mean": 100, "pricing_runtime_s_median": 3.0, "target_training_runtime_s_median": 7.0},
+    ]
+    per_rep = [
+        {"contract_id": "reference", "method": "GCV", "pricing_runtime_s": 4.0, "pricing_observations": 100, "error": ""},
+        {"contract_id": "reference", "method": "NCV_SCRATCH", "pricing_runtime_s": 3.0, "pricing_observations": 100, "error": ""},
+        {"contract_id": "reference", "method": "MC", "pricing_runtime_s": 10.0, "pricing_observations": 100, "error": ""},
+        {"contract_id": "reference", "method": "AV", "pricing_runtime_s": 12.0, "pricing_observations": 100, "error": ""},
+    ]
+    rows = s8.compute_matched_accuracy_results(aggregate, per_rep, n_training=5000, n_pilot=1000, shared_train_runtime_median=2.0)
+    gcv_row = next(r for r in rows if r["contract_id"] == "reference" and r["method"] == "GCV" and r["target_definition"] == "fixed_se_0.001")
+    assert gcv_row["cost_scope"] == "end_to_end"
+    assert gcv_row["setup_cost_s"] == 5.0
+    assert gcv_row["marginal_pricing_cost_s"] == gcv_row["projected_pricing_runtime_s_median"]
+    assert gcv_row["projected_total_cost_s"] == gcv_row["setup_cost_s"] + gcv_row["Q"] * gcv_row["marginal_pricing_cost_s"]
+    ncv_row = next(r for r in rows if r["contract_id"] == "reference" and r["method"] == "NCV_SCRATCH" and r["target_definition"] == "fixed_se_0.001")
+    assert ncv_row["setup_cost_s"] == 7.0
+    assert ncv_row["setup_reuse_assumption"] == "target NCV training counted once"
+    assert ncv_row["runtime_projection_is_empirical_or_projected"] == "projected_from_empirical_single_n"
+
+
+def test_matched_accuracy_target_definitions_include_fixed_and_gcv_matched():
+    aggregate = [{"contract_id": "reference", "method": "GCV", "mean_observation_variance": 1.0, "mean_reported_estimator_standard_error": 0.1, "pricing_observations_mean": 100}]
+    per_rep = [{"contract_id": "reference", "method": "GCV", "pricing_runtime_s": 1.0, "pricing_observations": 100, "error": ""}]
+    rows = s8.compute_matched_accuracy_results(aggregate, per_rep, n_training=10, n_pilot=5, shared_train_runtime_median=0.0)
+    targets = {r["target_definition"] for r in rows}
+    assert "fixed_se_0.001" in targets
+    assert "match_gcv_50000_se" in targets
+
+
 def test_combined_reference_uncertainty_calculation():
     agg = [{
         "contract_id": "reference",
@@ -256,6 +305,15 @@ def test_runtime_summary_contains_required_statistics():
     required = {"count", "mean", "std_dev", "median", "minimum", "maximum"}
     for r in summary:
         assert required.issubset(r.keys())
+
+
+def test_validation_report_fails_on_non_finite_runtime_or_variance():
+    rows = _fixture_rows(1)
+    rows[0]["pricing_runtime_s"] = float("nan")
+    seeds = s8._build_seed_manifest(base_seed=42, n_replications=1)
+    report = s8._build_validation_report(rows, seeds, n_replications=1, base_seed=42)
+    assert report["passed"] is False
+    assert any("non-finite pricing_runtime_s" in x for x in report["failures"])
 
 
 def test_portfolio_break_even_counts_shared_training_once():

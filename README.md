@@ -145,12 +145,35 @@ python scripts/run_stage8.py --profile dissertation --output-dir experiment_runs
 python scripts/run_stage8.py --profile dissertation --output-dir experiment_runs --empirical-equal-budget
 ```
 
+Stage 8 fixes now use a fixed NCV checkpoint of **25 epochs** sourced from
+the auxiliary training-curve validation tuning study
+(`ncv_epoch_source=training_curve_validation_tuning`). Training still uses
+MSE/Adam with the same architecture and option specification; only the fixed
+checkpoint policy changed. Final evaluation seeds are deterministically
+separated from training-curve train/validation/test streams.
+The tuning study documented that 25 epochs improved held-out NCV residual
+variance by roughly 26% versus 100 epochs (about 27.6% with validation-selected
+stopping), while GCV remained substantially stronger (about 5.8–5.9× lower
+residual variance than the best NCV checkpoint).
+
 ### NCV training-curve experiment (reference contract)
 
 ```bash
 python scripts/run_ncv_training_curve.py --profile smoke --output-dir experiment_runs
 python scripts/run_ncv_training_curve.py --profile dissertation --output-dir experiment_runs
 ```
+
+Training-curve reporting distinguishes:
+- optimizer objective: training MSE;
+- checkpoint criterion: validation residual variance
+  `Var(f(Z)-H_theta(Z))`;
+- held-out test set: final evaluation only.
+
+Projected matched-accuracy costs now use **end-to-end pricing runtime** (fresh
+RNG + path simulation + payoff + control evaluation + estimator averaging),
+with one-time setup costs (NCV training, GCV pilot where reusable) counted once
+and marginal pricing costs multiplied by `Q`. Runtime projection metadata
+records basis sizes and whether values are empirical or projected.
 
 ### NCV output-rescaling note
 

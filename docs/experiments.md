@@ -88,3 +88,14 @@ Each run writes a timestamped folder `run_YYYYMMDDTHHMMSSffffffZ` under `--outpu
 - Same seed + same config should produce identical `summary_stable.csv` bytes.
 - Different seed should change at least one stochastic metric row.
 - `metadata.json` captures `seeds` and `config_hash`.
+
+## Stage 8 / NCV training-curve cost scope note
+
+- Use end-to-end pricing cost for matched-accuracy projections:
+  RNG + GBM path generation + arithmetic payoff + control evaluation +
+  estimator averaging.
+- Keep component timings as diagnostics (`path_and_payoff_runtime_s`,
+  `control_evaluation_runtime_s`, `estimator_reduction_runtime_s`) but do not
+  replace end-to-end timing with a sum of duplicated components.
+- One-time costs are amortised once (`setup_cost_s`), pricing is multiplied by
+  `Q` (`projected_total_cost_s = setup_cost_s + Q * marginal_pricing_cost_s`).

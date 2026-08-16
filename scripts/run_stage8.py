@@ -55,11 +55,14 @@ SEED_OFFSET_HIGH_PREC = 9_000
 
 BASE_METHODS = ("MC", "AV", "GCV", "NCV_SCRATCH")
 TRANSFER_METHODS = ("NCV_TRANSFER_BETA1", "NCV_TRANSFER_BETA")
+STAGE8_FIXED_NCV_EPOCH = 25
+STAGE8_NCV_EPOCH_SOURCE = "training_curve_validation_tuning"
+FINAL_EVALUATION_SEED_NAMESPACE_OFFSET = 10_000_000
 
 
 def _replication_seeds(base_seed: int, replication: int) -> dict:
     rep_offset = replication * 100_000
-    s = base_seed + rep_offset
+    s = base_seed + FINAL_EVALUATION_SEED_NAMESPACE_OFFSET + rep_offset
     out = {
         "ref_train": s + SEED_OFFSET_REF_TRAIN,
         "ref_val": s + SEED_OFFSET_REF_VAL,
@@ -191,7 +194,7 @@ def _run_ncv_scratch(
     z_train = _extract_z_shocks(train_paths, train_cfg)
     dataset = {"X_train": z_train, "y_train": train_payoffs}
     network = build_network(train_cfg, hidden_width=32)
-    train_network(network, dataset, train_cfg, n_epochs=100)
+    train_network(network, dataset, train_cfg, n_epochs=STAGE8_FIXED_NCV_EPOCH)
     train_runtime = time.perf_counter() - t_train
 
     price_cfg = dataclasses.replace(contract_cfg_base, n_paths=n_pricing, seed=pricing_seed)
@@ -220,6 +223,8 @@ def _run_ncv_scratch(
         "pricing_runtime_s": pricing_runtime,
         "marginal_runtime_s": pricing_runtime,
         "standalone_runtime_s": train_runtime + pricing_runtime,
+        "ncv_epoch": STAGE8_FIXED_NCV_EPOCH,
+        "ncv_epoch_source": STAGE8_NCV_EPOCH_SOURCE,
         "hash_verified": "",
         "param_hash": "",
     }
@@ -246,6 +251,8 @@ def _replication_base_row(base_seed: int, replication: int, contract_id: str, me
         "sigma": sigma,
         "T": T,
         "method": method,
+        "ncv_epoch": STAGE8_FIXED_NCV_EPOCH if method.startswith("NCV") else "NA",
+        "ncv_epoch_source": STAGE8_NCV_EPOCH_SOURCE if method.startswith("NCV") else "NA",
     }
 
 
@@ -288,6 +295,7 @@ def run_replication(
                 ref_cfg,
                 n_training=n_training,
                 train_seed=seeds["ref_train"],
+                n_epochs=STAGE8_FIXED_NCV_EPOCH,
             )
             shared_training_row.update(
                 {
@@ -600,6 +608,18 @@ def _build_seed_manifest(base_seed: int, n_replications: int) -> List[dict]:
         for stream, value in seeds.items():
             rows.append({"base_seed": base_seed, "replication": rep, "stream": stream, "seed_value": value})
     return rows
+
+
+def seed_namespaces_are_disjoint(base_seed: int, replication: int) -> bool:
+    final_eval = set(_replication_seeds(base_seed, replication).values())
+    rep_offset = replication * 10_000
+    training_curve = {
+        base_seed + rep_offset + 1_000,
+        base_seed + rep_offset + 2_000,
+        base_seed + rep_offset + 3_000,
+        base_seed + rep_offset + 4_000,
+    }
+    return final_eval.isdisjoint(training_curve)
 
 
 def compute_all_high_precision_references(n_paths: int, base_seed: int) -> List[dict]:
@@ -1022,6 +1042,8 @@ def compute_matched_accuracy_results(
                     one_time_runtime = _safe_float(agg.get((cid, method), {}).get("target_training_runtime_s_median")) or 0.0
                 if method in TRANSFER_METHODS:
                     one_time_runtime = shared_train_runtime_median or 0.0
+                if method in ("GCV", "NCV_TRANSFER_BETA"):
+                    one_time_runtime += _safe_float(agg.get((cid, method), {}).get("pilot_runtime_s_median")) or 0.0
 
                 projected_pricing_runtime = (
                     (rt_per_obs_median * n_required) if (feasible and rt_per_obs_median is not None) else None
@@ -1031,28 +1053,46 @@ def compute_matched_accuracy_results(
                 )
 
                 marginal_runtime = projected_pricing_runtime
-                if marginal_runtime is not None and method in ("GCV", "NCV_TRANSFER_BETA"):
-                    pilot_rt = _safe_float(agg.get((cid, method), {}).get("pilot_runtime_s_median"))
-                    if pilot_rt is not None:
-                        marginal_runtime += pilot_rt
+                q_value = 1
 
-                standalone_runtime = (one_time_runtime + marginal_runtime) if marginal_runtime is not None else None
+                standalone_runtime = (one_time_runtime + q_value * marginal_runtime) if marginal_runtime is not None else None
 
                 rows.append(
                     {
                         "contract_id": cid,
                         "method": method,
+                        "cost_scope": "end_to_end",
                         "target_definition": target_definition,
                         "target_standard_error": target_se if target_se is not None else "NA",
+                        "target_se": target_se if target_se is not None else "NA",
+                        "Q": q_value,
                         "required_pricing_observations": n_required if feasible else "NA",
                         "required_simulated_paths": required_sim_paths,
                         "training_paths": training_paths,
                         "pilot_paths": pilot_paths,
                         "shared_paths": shared_paths,
+                        "runtime_projection_basis_n": int(_safe_float(agg.get((cid, method), {}).get("pricing_observations_mean")) or 0),
+                        "runtime_projection_is_empirical_or_projected": "projected_from_empirical_single_n",
+                        "setup_reuse_assumption": (
+                            "target NCV training counted once"
+                            if method == "NCV_SCRATCH"
+                            else (
+                                "shared reference NCV training counted once"
+                                if method in TRANSFER_METHODS
+                                else (
+                                    "GCV pilot counted once per target"
+                                    if method in ("GCV", "NCV_TRANSFER_BETA")
+                                    else "no setup cost"
+                                )
+                            )
+                        ),
                         "projected_pricing_runtime_s_median": projected_pricing_runtime if projected_pricing_runtime is not None else "NA",
                         "projected_pricing_runtime_s_mean_sensitivity": (
                             projected_pricing_runtime_mean if projected_pricing_runtime_mean is not None else "NA"
                         ),
+                        "setup_cost_s": one_time_runtime,
+                        "marginal_pricing_cost_s": projected_pricing_runtime if projected_pricing_runtime is not None else "NA",
+                        "projected_total_cost_s": standalone_runtime if standalone_runtime is not None else "NA",
                         "marginal_runtime_s": marginal_runtime if marginal_runtime is not None else "NA",
                         "one_time_runtime_s": one_time_runtime,
                         "standalone_runtime_s": standalone_runtime if standalone_runtime is not None else "NA",
@@ -1558,6 +1598,7 @@ def _build_validation_report(
     per_rep_rows: List[dict],
     seed_manifest: List[dict],
     n_replications: int,
+    base_seed: int,
 ) -> dict:
     failures: List[str] = []
     warnings: List[str] = []
@@ -1587,6 +1628,11 @@ def _build_validation_report(
         if ev is not None and ov is not None and po is not None and po > 0:
             if abs(ev - ov / po) > 1e-8 * max(1.0, abs(ov / po)):
                 failures.append(f"{rid}: estimator variance identity mismatch")
+        if str(r.get("method", "")).startswith("NCV"):
+            if int(r.get("ncv_epoch", -1)) != STAGE8_FIXED_NCV_EPOCH:
+                failures.append(f"{rid}: ncv_epoch must be {STAGE8_FIXED_NCV_EPOCH}")
+            if r.get("ncv_epoch_source") != STAGE8_NCV_EPOCH_SOURCE:
+                failures.append(f"{rid}: ncv_epoch_source mismatch")
 
     by_rep = defaultdict(list)
     for s in seed_manifest:
@@ -1595,6 +1641,9 @@ def _build_validation_report(
     for rep, vals in by_rep.items():
         if len(vals) != len(set(vals)):
             failures.append(f"duplicate pricing seeds in replication {rep}")
+    for rep in range(n_replications):
+        if not seed_namespaces_are_disjoint(base_seed, rep):
+            failures.append(f"seed namespace overlap with training-curve streams in replication {rep}")
 
     return {
         "passed": len(failures) == 0,
@@ -1713,6 +1762,8 @@ def run_stage8(
         "amortised_q_values": amortised_q_values,
         "n_high_precision": n_high_prec,
         "monitoring_dates": monitoring_dates,
+        "fixed_ncv_epoch": STAGE8_FIXED_NCV_EPOCH,
+        "ncv_epoch_source": STAGE8_NCV_EPOCH_SOURCE,
         "torch_available": torch_available,
         "contracts": {cid: {"K": K, "sigma": s, "T": T} for cid, (K, s, T) in CONTRACT_GRID.items()},
         "seed_offsets": {
@@ -1722,6 +1773,10 @@ def run_stage8(
             "pilot": SEED_OFFSET_PILOT,
             "pricing": SEED_OFFSET_PRICING,
             "high_prec": SEED_OFFSET_HIGH_PREC,
+        },
+        "seed_namespace": {
+            "training_curve_offsets": {"train": 1_000, "validation": 2_000, "test": 3_000, "gcv_pilot": 4_000},
+            "final_evaluation_offset": FINAL_EVALUATION_SEED_NAMESPACE_OFFSET,
         },
         "timestamp_utc": ts,
         "commit_hash": _commit_hash(),
@@ -1861,7 +1916,7 @@ def run_stage8(
     )
     _write_csv(run_dir / "equal_budget_empirical_results.csv", empirical_rows)
 
-    validation_report = _build_validation_report(all_per_rep, seed_manifest, n_replications)
+    validation_report = _build_validation_report(all_per_rep, seed_manifest, n_replications, base_seed)
     _write_json(run_dir / "validation_report.json", validation_report)
 
     if profile == "dissertation":
@@ -1911,6 +1966,7 @@ def run_stage8(
 - base seed: {base_seed}
 - replications: {n_replications}
 - monitoring dates: {monitoring_dates}
+- fixed NCV epoch: {STAGE8_FIXED_NCV_EPOCH} ({STAGE8_NCV_EPOCH_SOURCE})
 - Torch: {torch_line}
 - failed-row count: {n_failed}
 - successful-row count: {n_success}
