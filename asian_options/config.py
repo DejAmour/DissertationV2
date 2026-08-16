@@ -14,6 +14,7 @@ import platform
 import random
 import sys
 from dataclasses import dataclass, field
+from importlib import metadata as importlib_metadata
 from importlib import import_module
 
 import numpy as np
@@ -177,15 +178,20 @@ def collect_environment_metadata() -> dict[str, object]:
     metadata["virtual_environment_active"] = bool(in_venv)
     metadata["virtual_environment_path"] = str(venv_path) if venv_path else "NA"
 
-    for package_name in ("numpy", "scipy", "torch", "pytest"):
+    for package_name in ("numpy", "scipy", "torch", "pytest", "matplotlib"):
+        try:
+            metadata[f"{package_name}_version"] = importlib_metadata.version(package_name)
+            continue
+        except importlib_metadata.PackageNotFoundError:
+            pass
+        except Exception:
+            pass
         try:
             module = import_module(package_name)
         except ImportError:
             metadata[f"{package_name}_version"] = "not-installed"
         else:
-            metadata[f"{package_name}_version"] = getattr(
-                module, "__version__", "unknown"
-            )
+            metadata[f"{package_name}_version"] = getattr(module, "__version__", "unknown")
 
     try:
         torch = import_module("torch")

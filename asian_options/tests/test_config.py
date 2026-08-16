@@ -128,6 +128,7 @@ def test_collect_environment_metadata_has_stage1_fields() -> None:
         "scipy_version",
         "torch_version",
         "pytest_version",
+        "matplotlib_version",
         "torch_deterministic_enabled",
     ):
         assert field in metadata

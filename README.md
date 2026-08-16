@@ -61,6 +61,7 @@ Asian-options code only and does not change the Brent-analysis environment.
 - scipy 1.18.0
 - torch 2.13.0+cpu
 - pytest 9.1.1
+- matplotlib 3.10.7
 
 Install into a clean virtual environment from the repository root:
 
@@ -179,6 +180,10 @@ RNG + path simulation + payoff + control evaluation + estimator averaging),
 with one-time setup costs (NCV training, GCV pilot where reusable) counted once
 and marginal pricing costs multiplied by `Q`. Runtime projection metadata
 records basis sizes and whether values are empirical or projected.
+Raw bounded timing observations are exported to
+`training_curve_runtime_benchmarks.csv` (one row per replication/method/timing
+size/repeat) and are the direct source for repeat aggregation, linearity ratios,
+projection-method selection, and marginal-cost projection inputs.
 Diagnostic component runtime fields are only populated when separately measured;
 otherwise they are recorded as `NA` with
 `component_runtime_measurement_status=not_separately_measured`.
@@ -190,6 +195,12 @@ For NCV training-curve outputs, `ncv_setup_cost_s` is defined as
 for checkpoints above zero, and `0` at checkpoint zero; validation
 generation/evaluation runtime is explicitly labeled as research/tuning overhead
 excluded from operational setup cost.
+Summary confidence intervals now use two-sided Student-t intervals for finite
+replication counts (`n>=2`), with explicit CI metadata and `n=1` marked
+undefined (no synthetic interval).
+The training-curve config field `default_epochs` is explicitly scoped to the
+training-curve default checkpoint horizon (`default_epochs_scope`) and is not
+the Stage 8 fixed checkpoint policy.
 
 Before final dissertation runs, activate the environment and record the Python
 interpreter:

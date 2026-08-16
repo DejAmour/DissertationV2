@@ -10,7 +10,9 @@ import pytest
 from asian_options.ncv_training_curve import (
     TRAINING_CURVE_SELECTED_NCV_EPOCH,
     TRAINING_CURVE_SELECTED_NCV_EPOCH_SOURCE,
+    _cost_panel_line_style_descriptors,
     _fixed_checkpoint_plot_descriptor,
+    _student_t_confidence95,
     TrainingCurveConfig,
     build_seed_manifest,
     compute_ncv_setup_cost,
@@ -27,6 +29,7 @@ from asian_options.ncv_training_curve import (
     simulate_split_dataset,
     validate_numeric_content,
     validate_output_schema,
+    validate_runtime_benchmarks,
     validate_checkpoints,
 )
 
@@ -49,6 +52,7 @@ def test_smoke_configuration_is_valid():
     assert list(cfg.timing_path_counts) == [100, 500]
     assert cfg.timing_repeats == 1
     assert 50_000 not in cfg.timing_path_counts
+    assert cfg.default_epochs_scope == "training_curve_default_checkpoint_horizon_not_stage8_policy"
 
 
 def test_checkpoint_grid_strict_and_zero_start():
@@ -70,6 +74,7 @@ def test_dissertation_configuration_uses_252_monitoring_dates():
     assert cfg.pilot_paths == 1_000
     assert list(cfg.timing_path_counts) == [1_000, 5_000, 10_000]
     assert cfg.timing_repeats == 3
+    assert cfg.default_epochs_scope == "training_curve_default_checkpoint_horizon_not_stage8_policy"
 
 
 def test_training_validation_test_seeds_are_distinct():
@@ -159,6 +164,48 @@ def test_fixed_checkpoint_plot_descriptor_handles_out_of_range_and_in_range():
     assert dissertation["annotation"] == ""
 
 
+def test_cost_panel_line_style_descriptors_are_explicit():
+    solid, dashed = _cost_panel_line_style_descriptors()
+    assert solid == "solid = NCV"
+    assert dashed == "dashed = GCV"
+
+
+def test_student_t_confidence_interval_n_equals_1_reports_na_status():
+    ci = _student_t_confidence95([3.0])
+    assert ci["ci95_lower"] == "NA"
+    assert ci["ci95_upper"] == "NA"
+    assert ci["ci_status"] == "undefined_n_equals_1"
+    assert ci["ci_method"] == "NA"
+
+
+def test_student_t_confidence_interval_exact_n2():
+    vals = [1.0, 3.0]
+    ci = _student_t_confidence95(vals)
+    m = sum(vals) / 2.0
+    s = math.sqrt(((1.0 - m) ** 2 + (3.0 - m) ** 2) / 1.0)
+    expected_t = 12.706204736432095
+    half = expected_t * s / math.sqrt(2.0)
+    assert ci["ci_method"] == "student-t"
+    assert ci["ci_degrees_of_freedom"] == 1
+    assert math.isclose(float(ci["ci_critical_value"]), expected_t, rel_tol=1e-12)
+    assert math.isclose(float(ci["ci95_lower"]), m - half, rel_tol=1e-12)
+    assert math.isclose(float(ci["ci95_upper"]), m + half, rel_tol=1e-12)
+
+
+def test_student_t_confidence_interval_exact_n10():
+    vals = [float(x) for x in range(1, 11)]
+    ci = _student_t_confidence95(vals)
+    m = sum(vals) / len(vals)
+    s = np.std(vals, ddof=1)
+    expected_t = 2.2621571628540993
+    half = expected_t * s / math.sqrt(len(vals))
+    assert ci["ci_method"] == "student-t"
+    assert ci["ci_degrees_of_freedom"] == 9
+    assert math.isclose(float(ci["ci_critical_value"]), expected_t, rel_tol=1e-12)
+    assert math.isclose(float(ci["ci95_lower"]), m - half, rel_tol=1e-12)
+    assert math.isclose(float(ci["ci95_upper"]), m + half, rel_tol=1e-12)
+
+
 @pytest.mark.skipif(not _TORCH_AVAILABLE, reason="torch required")
 def test_tiny_run_outputs_schema_and_checkpoint_properties(tmp_path, monkeypatch):
     from asian_options import ncv_training_curve as tc
@@ -181,6 +228,7 @@ def test_tiny_run_outputs_schema_and_checkpoint_properties(tmp_path, monkeypatch
         hidden_width=8,
         learning_rate=1e-2,
         default_epochs=2,
+        default_epochs_scope="training_curve_default_checkpoint_horizon_not_stage8_policy",
         train_batch_size=8,
         runtime_repeats=2,
         pilot_paths=10,
@@ -199,6 +247,7 @@ def test_tiny_run_outputs_schema_and_checkpoint_properties(tmp_path, monkeypatch
         "training_curve_environment.json",
         "training_curve_seed_manifest.csv",
         "training_curve_per_replication.csv",
+        "training_curve_runtime_benchmarks.csv",
         "training_curve_summary.csv",
         "training_curve_diminishing_returns.csv",
         "training_curve_optimal_checkpoints.csv",
@@ -212,6 +261,28 @@ def test_tiny_run_outputs_schema_and_checkpoint_properties(tmp_path, monkeypatch
     with (out_dir / "training_curve_per_replication.csv").open() as fh:
         rows = list(csv.DictReader(fh))
     assert rows
+
+    with (out_dir / "training_curve_runtime_benchmarks.csv").open() as fh:
+        runtime_rows = list(csv.DictReader(fh))
+    assert len(runtime_rows) == cfg.replications * 4 * len(cfg.timing_path_counts) * cfg.timing_repeats
+    runtime_keys = {
+        (
+            int(r["replication"]),
+            r["method"],
+            r["ncv_checkpoint"],
+            int(r["timing_path_count"]),
+            int(r["repeat_index"]),
+        )
+        for r in runtime_rows
+    }
+    assert len(runtime_keys) == len(runtime_rows)
+    for r in runtime_rows:
+        runtime = float(r["end_to_end_runtime_s"])
+        obs = int(r["pricing_observations"])
+        per_obs = float(r["end_to_end_runtime_per_observation_s"])
+        assert runtime >= 0.0
+        assert per_obs >= 0.0
+        assert math.isclose(per_obs, runtime / obs, rel_tol=1e-12, abs_tol=1e-12)
 
     checkpoints = sorted({int(r["checkpoint"]) for r in rows if r["split"] == "validation"})
     assert checkpoints == [0, 1, 2]
@@ -280,6 +351,11 @@ def test_tiny_run_outputs_schema_and_checkpoint_properties(tmp_path, monkeypatch
     facts_payload = cfg_payload["ncv_training_facts"]
     assert facts_payload["epoch_count_defaults"]["stage8_scratch_and_reference"] == 25
     assert facts_payload["stage8_fixed_ncv_epoch_source"] == "training_curve_validation_tuning"
+    assert cfg_payload["default_epochs_scope"] == "training_curve_default_checkpoint_horizon_not_stage8_policy"
+
+    with (out_dir / "training_curve_environment.json").open() as fh:
+        env_payload = json.load(fh)
+    assert "matplotlib_version" in env_payload
 
 
 def test_validation_report_self_check_pre_and_post_write(tmp_path):
@@ -449,6 +525,140 @@ def test_runtime_projection_warnings_are_deduplicated_by_profile():
     assert sum("method=GCV" in w for w in warnings) == 1
 
 
+def _runtime_benchmark_fixture_rows():
+    timing_counts = (100, 500)
+    methods = ("MC", "AV", "GCV", "NCV")
+    rows = []
+    for method in methods:
+        for n in timing_counts:
+            rows.append(
+                {
+                    "replication": 0,
+                    "method": method,
+                    "ncv_checkpoint": 2 if method == "NCV" else "NA",
+                    "timing_path_count": n,
+                    "pricing_observations": n,
+                    "simulated_paths": 2 * n if method == "AV" else n,
+                    "repeat_index": 1,
+                    "end_to_end_runtime_s": n / 1000.0,
+                    "end_to_end_runtime_per_observation_s": 1 / 1000.0,
+                    "runtime_scope": "end_to_end_pricing_rng_path_payoff_control_estimator",
+                    "torch_tensor_conversion_inside_timing": method == "NCV",
+                    "profile": "smoke",
+                    "timing_repeats_configured": 1,
+                    "timing_path_counts_configured": "100|500",
+                    "runtime_projection_is_empirical_or_projected": "empirical",
+                    "path_and_payoff_runtime_s": "NA",
+                    "control_evaluation_runtime_s": "NA",
+                    "estimator_reduction_runtime_s": "NA",
+                    "component_runtime_measurement_status": "not_separately_measured",
+                    "n_paths": n,
+                    "end_to_end_pricing_runtime_s": n / 1000.0,
+                }
+            )
+    return rows
+
+
+def _runtime_benchmark_fixture_config(tmp_path):
+    return TrainingCurveConfig(
+        profile="smoke",
+        base_seed=1,
+        replications=1,
+        train_paths=16,
+        validation_paths=20,
+        test_paths=24,
+        monitoring_dates=12,
+        checkpoints=(0, 2),
+        hidden_width=8,
+        learning_rate=1e-2,
+        default_epochs=2,
+        default_epochs_scope="training_curve_default_checkpoint_horizon_not_stage8_policy",
+        train_batch_size=8,
+        runtime_repeats=1,
+        pilot_paths=10,
+        timing_path_counts=(100, 500),
+        timing_repeats=1,
+        pricing_observations_for_reporting=200,
+        q_values=(1,),
+        se_targets=(0.001,),
+        output_dir=str(tmp_path),
+    )
+
+
+def test_runtime_benchmark_validation_row_count_and_projection_recompute(tmp_path):
+    raw_rows = _runtime_benchmark_fixture_rows()
+    cfg = _runtime_benchmark_fixture_config(tmp_path)
+    per_rep_rows = [{
+        "replication": 0,
+        "checkpoint": 2,
+        "split": "validation",
+        "runtime_projection_basis_n": "100|500",
+        "runtime_projection_method": "linear_per_observation_rate",
+        "runtime_projection_linearity_ratio": 1.0,
+        "runtime_projection_is_sufficiently_linear": True,
+        "timing_path_counts": "100|500",
+        "timing_repeats": 1,
+    }]
+    gcv_rows = [{
+        "replication": 0,
+        "split": "validation",
+        "runtime_projection_basis_n": "100|500",
+        "runtime_projection_method": "linear_per_observation_rate",
+    }]
+    optimal_rows = [{
+        "replication": 0,
+        "checkpoint": 2,
+        "Q": 1,
+        "runtime_projection_basis_n": "100|500",
+        "runtime_projection_method": "linear_per_observation_rate",
+        "runtime_projection_linearity_ratio": 1.0,
+        "required_pricing_observations": 1_000,
+        "runtime_at_required_n_is_empirical_or_projected": "projected",
+        "gcv_required_pricing_observations": 1_000,
+        "gcv_runtime_at_required_n_is_empirical_or_projected": "projected",
+    }]
+    errors, warnings, stats = validate_runtime_benchmarks(raw_rows, per_rep_rows, gcv_rows, optimal_rows, cfg)
+    assert errors == []
+    assert warnings == []
+    assert stats["expected_row_count"] == 8
+    assert stats["actual_row_count"] == 8
+
+
+def test_runtime_benchmark_validation_rejects_duplicate_keys(tmp_path):
+    raw_rows = _runtime_benchmark_fixture_rows()
+    raw_rows.append(dict(raw_rows[0]))
+    cfg = _runtime_benchmark_fixture_config(tmp_path)
+    errors, _, _ = validate_runtime_benchmarks(raw_rows, [], [], [], cfg)
+    assert any("duplicate key" in e for e in errors)
+
+
+def test_runtime_benchmark_validation_rejects_projected_as_empirical(tmp_path):
+    raw_rows = _runtime_benchmark_fixture_rows()
+    cfg = _runtime_benchmark_fixture_config(tmp_path)
+    optimal_rows = [{
+        "replication": 0,
+        "checkpoint": 2,
+        "Q": 1,
+        "runtime_projection_basis_n": "100|500",
+        "runtime_projection_method": "linear_per_observation_rate",
+        "runtime_projection_linearity_ratio": 1.0,
+        "required_pricing_observations": 1_000,
+        "runtime_at_required_n_is_empirical_or_projected": "empirical",
+        "gcv_required_pricing_observations": 1_000,
+        "gcv_runtime_at_required_n_is_empirical_or_projected": "empirical",
+    }]
+    errors, _, _ = validate_runtime_benchmarks(raw_rows, [], [], optimal_rows, cfg)
+    assert any("mislabelled empirical" in e for e in errors)
+
+
+def test_runtime_benchmark_validation_recomputes_per_observation_rate(tmp_path):
+    raw_rows = _runtime_benchmark_fixture_rows()
+    raw_rows[0]["end_to_end_runtime_per_observation_s"] = 123.0
+    cfg = _runtime_benchmark_fixture_config(tmp_path)
+    errors, _, _ = validate_runtime_benchmarks(raw_rows, [], [], [], cfg)
+    assert any("per-observation runtime mismatch" in e for e in errors)
+
+
 def test_legacy_gcv_control_only_runtime_does_not_drive_projected_costs():
     profiles_a = [
         {"method": "GCV", "n_paths": 100, "end_to_end_pricing_runtime_s": 10.0, "gcv_pricing_runtime_s": 0.01},
@@ -554,12 +764,8 @@ def test_runtime_timing_loops_are_bounded_and_not_checkpoint_or_q_driven(tmp_pat
             "n_paths": n,
             "timing_repeats": 1,
             "timing_path_counts": str(n),
-            "path_and_payoff_runtime_s": n / 1000.0,
-            "control_evaluation_runtime_s": 0.0,
-            "estimator_reduction_runtime_s": 0.0,
-            "end_to_end_pricing_runtime_s": n / 1000.0,
             "torch_tensor_conversion_inside_pricing_timing": True,
-            "end_to_end_runtime_per_observation_s": 1 / 1000.0,
+            "repeat_end_to_end_runtime_s": [n / 1000.0],
         }
 
     def fake_project_runtime_at_n(_profiles, _method, n_required):
@@ -612,6 +818,7 @@ def test_runtime_timing_loops_are_bounded_and_not_checkpoint_or_q_driven(tmp_pat
         hidden_width=8,
         learning_rate=1e-2,
         default_epochs=2,
+        default_epochs_scope="training_curve_default_checkpoint_horizon_not_stage8_policy",
         train_batch_size=8,
         runtime_repeats=1,
         pilot_paths=10,

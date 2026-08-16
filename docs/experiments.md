@@ -94,6 +94,11 @@ Each run writes a timestamped folder `run_YYYYMMDDTHHMMSSffffffZ` under `--outpu
 - Use end-to-end pricing cost for matched-accuracy projections:
   RNG + GBM path generation + arithmetic payoff + control evaluation +
   estimator averaging.
+- Record bounded empirical timing rows in
+  `training_curve_runtime_benchmarks.csv` (replication × method × timing size ×
+  repeat) and use those exact rows as the sole input for timing-repeat
+  aggregation, linearity diagnostics, projection-method choice, and runtime
+  cost projection.
 - Keep component timings as diagnostics (`path_and_payoff_runtime_s`,
   `control_evaluation_runtime_s`, `estimator_reduction_runtime_s`) but do not
   replace end-to-end timing with a sum of duplicated components. If components
@@ -110,6 +115,8 @@ Each run writes a timestamped folder `run_YYYYMMDDTHHMMSSffffffZ` under `--outpu
   `ncv_epoch_source=training_curve_validation_tuning`; this is separate from
   the generic `neural_cv.train_network` default (200 epochs), and the generic
   training function does not perform online early stopping.
+- For training-curve summaries, confidence intervals are two-sided Student-t
+  intervals (`n>=2`); `n=1` rows are marked CI undefined.
 - Legacy `gcv_pricing_runtime_s` and `gcv_per_observation_runtime_s` remain
   diagnostic control-only fields; primary costing uses explicit end-to-end
   runtime fields.
