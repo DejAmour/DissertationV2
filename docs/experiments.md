@@ -99,3 +99,8 @@ Each run writes a timestamped folder `run_YYYYMMDDTHHMMSSffffffZ` under `--outpu
   replace end-to-end timing with a sum of duplicated components.
 - One-time costs are amortised once (`setup_cost_s`), pricing is multiplied by
   `Q` (`projected_total_cost_s = setup_cost_s + Q * marginal_pricing_cost_s`).
+- For NCV training-curve checkpoints, operational setup is
+  `ncv_setup_cost_s = training_data_generation_runtime_s + optimizer_cumulative_training_runtime_s`
+  for checkpoint > 0 and `0` for checkpoint = 0.
+- Validation generation/evaluation runtime is tracked separately as
+  research/tuning overhead and excluded from operational setup cost.

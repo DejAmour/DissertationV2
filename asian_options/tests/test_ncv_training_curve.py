@@ -10,6 +10,7 @@ import pytest
 from asian_options.ncv_training_curve import (
     TrainingCurveConfig,
     build_seed_manifest,
+    compute_ncv_setup_cost,
     compute_ncv_split_diagnostics,
     compute_required_paths,
     compute_total_cost,
@@ -108,6 +109,20 @@ def test_cost_formula_training_once_pricing_q_times():
     assert abs(c - (5.0 + 3 * (10 * 0.2))) < 1e-12
 
 
+def test_ncv_setup_cost_definition_checkpoint_zero_and_positive():
+    assert compute_ncv_setup_cost(3.0, 4.0, checkpoint=0) == 0.0
+    assert compute_ncv_setup_cost(3.0, 4.0, checkpoint=1) == 7.0
+
+
+def test_setup_not_multiplied_by_q():
+    setup = compute_ncv_setup_cost(3.0, 7.0, checkpoint=25)
+    per_obs = 0.2
+    n_required = 100
+    total_q1 = compute_total_cost(setup, n_required, per_obs, reuse_q=1)
+    total_q10 = compute_total_cost(setup, n_required, per_obs, reuse_q=10)
+    assert total_q10 - total_q1 == 9 * (n_required * per_obs)
+
+
 def test_gcv_benchmark_uses_same_contract_and_monitoring_schedule():
     val = simulate_split_dataset(monitoring_dates=252, n_paths=20, seed=1)
     test = simulate_split_dataset(monitoring_dates=252, n_paths=20, seed=2)
@@ -183,15 +198,31 @@ def test_tiny_run_outputs_schema_and_checkpoint_properties(tmp_path, monkeypatch
     assert checkpoints == [0, 1, 2]
 
     epoch0_rows = [r for r in rows if int(r["checkpoint"]) == 0]
-    assert all(float(r["cumulative_training_runtime_s"]) == 0.0 for r in epoch0_rows)
+    assert all(float(r["ncv_setup_cost_s"]) == 0.0 for r in epoch0_rows)
+    assert all(float(r["cumulative_training_runtime_s"]) == float(r["training_data_generation_runtime_s"]) for r in epoch0_rows)
 
     for split in ("validation", "test"):
         split_rows = sorted(
             [r for r in rows if r["split"] == split],
             key=lambda r: int(r["checkpoint"]),
         )
-        times = [float(r["cumulative_training_runtime_s"]) for r in split_rows]
+        times = [float(r["optimizer_cumulative_training_runtime_s"]) for r in split_rows]
         assert all(times[i] <= times[i + 1] for i in range(len(times) - 1))
+        assert all(
+            float(r["ncv_setup_cost_s"])
+            == compute_ncv_setup_cost(
+                float(r["training_data_generation_runtime_s"]),
+                float(r["optimizer_cumulative_training_runtime_s"]),
+                int(r["checkpoint"]),
+            )
+            for r in split_rows
+        )
+        assert all(
+            r["validation_generation_and_evaluation_runtime_cost_scope"]
+            == "research_tuning_overhead_excluded_from_operational_setup_cost"
+            for r in split_rows
+        )
+        assert all(r["cumulative_training_runtime_scope"] == "training_data_generation_plus_optimizer_cumulative" for r in split_rows)
         assert all(r["evaluation_no_grad"] == "True" for r in split_rows)
         assert all(math.isfinite(float(r["analytical_eh"])) for r in split_rows)
 
@@ -201,6 +232,20 @@ def test_tiny_run_outputs_schema_and_checkpoint_properties(tmp_path, monkeypatch
     assert all(r["selection_split"] == "validation" for r in opts)
     grid = {0, 1, 2}
     assert all(int(r["checkpoint"]) in grid for r in opts)
+    assert all(float(r["projected_total_cost_s"]) == float(r["setup_cost_s"]) + int(r["Q"]) * float(r["marginal_pricing_cost_s"]) for r in opts)
+    assert all(float(r["ncv_setup_cost_s"]) == float(r["setup_cost_s"]) for r in opts)
+    assert all(r["cumulative_training_runtime_scope"] == "training_data_generation_plus_optimizer_cumulative" for r in opts)
+    assert all(
+        r["validation_generation_and_evaluation_runtime_cost_scope"]
+        == "research_tuning_overhead_excluded_from_operational_setup_cost"
+        for r in opts
+    )
+    assert any(
+        int(r["checkpoint"]) > 0
+        and float(r["training_data_generation_runtime_s"]) > 0.0
+        and float(r["setup_cost_s"]) != float(r["optimizer_cumulative_training_runtime_s"])
+        for r in opts
+    )
 
     with (out_dir / "training_curve_validation_report.json").open() as fh:
         report = json.load(fh)
@@ -249,8 +294,10 @@ def test_numeric_validation_fails_for_non_finite_timing_or_variance():
         "ncv_end_to_end_runtime_per_observation_s": 0.01,
         "cumulative_training_runtime_s": 1.0,
         "training_data_generation_runtime_s": 1.0,
+        "optimizer_cumulative_training_runtime_s": 1.0,
         "optimizer_training_runtime_s": 1.0,
         "validation_generation_and_evaluation_runtime_s": 1.0,
+        "ncv_setup_cost_s": 1.0,
         "runtime_projection_is_sufficiently_linear": True,
     }]
     gcv_rows = [{"replication": 0, "split": "validation", "gcv_residual_variance": 1.0, "end_to_end_pricing_runtime_s": 1.0, "end_to_end_runtime_per_observation_s": float("nan")}]

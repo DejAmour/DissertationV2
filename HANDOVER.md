@@ -78,6 +78,11 @@ All realized seeds are saved in `seed_manifest.csv` in each output bundle.
   (path/payoff, control evaluation, estimator reduction, and full pricing
   runtime), and projected total cost uses:
   `setup_cost + Q * marginal_pricing_cost`.
+- NCV setup accounting is explicit: `ncv_setup_cost_s` is zero at checkpoint 0;
+  otherwise it is `training_data_generation_runtime_s +
+  optimizer_cumulative_training_runtime_s`. Validation
+  generation/evaluation runtime is labeled as research/tuning overhead excluded
+  from operational setup cost.
 - Validation report generation now performs a post-write self-check so
   `training_curve_validation_report.json` no longer fails because it checked for
   itself before creation.

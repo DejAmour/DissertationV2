@@ -239,7 +239,7 @@ def test_matched_accuracy_cost_fields_use_end_to_end_pricing_and_setup_once():
         {"contract_id": "reference", "method": "MC", "mean_observation_variance": 4.0, "pricing_observations_mean": 100, "pricing_runtime_s_median": 10.0},
         {"contract_id": "reference", "method": "AV", "mean_observation_variance": 2.0, "pricing_observations_mean": 100, "pricing_runtime_s_median": 12.0},
         {"contract_id": "reference", "method": "GCV", "mean_observation_variance": 1.0, "mean_reported_estimator_standard_error": 0.1, "pricing_observations_mean": 100, "pilot_runtime_s_median": 5.0, "pricing_runtime_s_median": 4.0},
-        {"contract_id": "reference", "method": "NCV_SCRATCH", "mean_observation_variance": 1.5, "mean_reported_estimator_standard_error": 0.12, "pricing_observations_mean": 100, "pricing_runtime_s_median": 3.0, "target_training_runtime_s_median": 7.0},
+        {"contract_id": "reference", "method": "NCV_SCRATCH", "mean_observation_variance": 1.5, "mean_reported_estimator_standard_error": 0.12, "pricing_observations_mean": 100, "pricing_runtime_s_median": 3.0, "target_training_runtime_s_median": 7.0, "ncv_setup_cost_s_median": 7.0},
     ]
     per_rep = [
         {"contract_id": "reference", "method": "GCV", "pricing_runtime_s": 4.0, "pricing_observations": 100, "error": ""},
@@ -255,8 +255,24 @@ def test_matched_accuracy_cost_fields_use_end_to_end_pricing_and_setup_once():
     assert gcv_row["projected_total_cost_s"] == gcv_row["setup_cost_s"] + gcv_row["Q"] * gcv_row["marginal_pricing_cost_s"]
     ncv_row = next(r for r in rows if r["contract_id"] == "reference" and r["method"] == "NCV_SCRATCH" and r["target_definition"] == "fixed_se_0.001")
     assert ncv_row["setup_cost_s"] == 7.0
-    assert ncv_row["setup_reuse_assumption"] == "target NCV training counted once"
+    assert ncv_row["ncv_setup_cost_s"] == 7.0
+    assert "training-data generation + optimizer runtime" in ncv_row["setup_reuse_assumption"]
     assert ncv_row["runtime_projection_is_empirical_or_projected"] == "projected_from_empirical_single_n"
+
+
+def test_matched_accuracy_prefers_explicit_ncv_setup_cost_over_legacy_training_field():
+    aggregate = [
+        {"contract_id": "reference", "method": "NCV_SCRATCH", "mean_observation_variance": 1.0, "pricing_observations_mean": 100, "pricing_runtime_s_median": 2.0, "target_training_runtime_s_median": 3.0, "ncv_setup_cost_s_median": 9.0},
+        {"contract_id": "reference", "method": "GCV", "mean_observation_variance": 1.0, "mean_reported_estimator_standard_error": 0.1, "pricing_observations_mean": 100, "pilot_runtime_s_median": 1.0, "pricing_runtime_s_median": 2.0},
+    ]
+    per_rep = [
+        {"contract_id": "reference", "method": "NCV_SCRATCH", "pricing_runtime_s": 2.0, "pricing_observations": 100, "error": ""},
+        {"contract_id": "reference", "method": "GCV", "pricing_runtime_s": 2.0, "pricing_observations": 100, "error": ""},
+    ]
+    rows = s8.compute_matched_accuracy_results(aggregate, per_rep, n_training=10, n_pilot=5, shared_train_runtime_median=0.0)
+    ncv_row = next(r for r in rows if r["contract_id"] == "reference" and r["method"] == "NCV_SCRATCH" and r["target_definition"] == "fixed_se_0.001")
+    assert ncv_row["setup_cost_s"] == 9.0
+    assert ncv_row["ncv_setup_cost_s"] == 9.0
 
 
 def test_matched_accuracy_target_definitions_include_fixed_and_gcv_matched():
@@ -334,6 +350,58 @@ def test_portfolio_break_even_counts_shared_training_once():
     row = portfolio[0]
     assert row["portfolio"] == "six_target_contract_cycle"
     assert row["shared_reference_training_counted_once"] is True
+
+
+def test_break_even_changes_when_ncv_setup_cost_changes():
+    aggregate_low = []
+    aggregate_high = []
+    for cid in TARGET_IDS:
+        aggregate_low.extend(
+            [
+                {
+                    "contract_id": cid,
+                    "method": "GCV",
+                    "marginal_runtime_s_median": 10.0,
+                    "pricing_observations_mean": 100,
+                    "pricing_runtime_s_median": 10.0,
+                },
+                {
+                    "contract_id": cid,
+                    "method": "NCV_SCRATCH",
+                    "marginal_runtime_s_median": 5.0,
+                    "target_training_runtime_s_median": 2.0,
+                    "ncv_setup_cost_s_median": 2.0,
+                    "pricing_observations_mean": 100,
+                    "pricing_runtime_s_median": 5.0,
+                },
+            ]
+        )
+        aggregate_high.extend(
+            [
+                {
+                    "contract_id": cid,
+                    "method": "GCV",
+                    "marginal_runtime_s_median": 10.0,
+                    "pricing_observations_mean": 100,
+                    "pricing_runtime_s_median": 10.0,
+                },
+                {
+                    "contract_id": cid,
+                    "method": "NCV_SCRATCH",
+                    "marginal_runtime_s_median": 5.0,
+                    "target_training_runtime_s_median": 2.0,
+                    "ncv_setup_cost_s_median": 20.0,
+                    "pricing_observations_mean": 100,
+                    "pricing_runtime_s_median": 5.0,
+                },
+            ]
+        )
+    be_low, _, _, _ = s8.compute_break_even_tables(aggregate_low, [], [])
+    be_high, _, _, _ = s8.compute_break_even_tables(aggregate_high, [], [])
+    row_low = next(r for r in be_low if r["contract_id"] == TARGET_IDS[0] and r["method"] == "NCV_SCRATCH")
+    row_high = next(r for r in be_high if r["contract_id"] == TARGET_IDS[0] and r["method"] == "NCV_SCRATCH")
+    assert row_low["break_even_q"] == 1
+    assert row_high["break_even_q"] == 4
 
 
 def test_handover_torch_matches_environment_snapshot(tmp_path):
