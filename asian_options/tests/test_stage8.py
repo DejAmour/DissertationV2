@@ -307,13 +307,14 @@ def test_runtime_summary_contains_required_statistics():
         assert required.issubset(r.keys())
 
 
-def test_validation_report_fails_on_non_finite_runtime_or_variance():
+@pytest.mark.parametrize("field", ["pricing_runtime_s", "observation_variance", "estimator_variance"])
+def test_validation_report_fails_on_non_finite_runtime_or_variance(field):
     rows = _fixture_rows(1)
-    rows[0]["pricing_runtime_s"] = float("nan")
+    rows[0][field] = float("nan")
     seeds = s8._build_seed_manifest(base_seed=42, n_replications=1)
     report = s8._build_validation_report(rows, seeds, n_replications=1, base_seed=42)
     assert report["passed"] is False
-    assert any("non-finite pricing_runtime_s" in x for x in report["failures"])
+    assert any(f"non-finite {field}" in x for x in report["failures"])
 
 
 def test_portfolio_break_even_counts_shared_training_once():
