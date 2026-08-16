@@ -1,0 +1,13 @@
+{
+  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "python_version": "3.12.3",
+  "numpy_version": "2.5.2",
+  "scipy_version": "1.18.0",
+  "torch_version": "not-installed",
+  "pytest_version": "9.1.1",
+  "torch_available": false,
+  "cuda_available": false,
+  "torch_deterministic_enabled": false,
+  "torch_deterministic_warn_only": false,
+  "cpu_count": 4
+}

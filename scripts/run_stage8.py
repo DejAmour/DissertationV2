@@ -726,7 +726,12 @@ def aggregate_results(per_rep_rows: List[dict], high_precision_rows: List[dict])
     return out
 
 
-def equal_observation_results(aggregate_rows: List[dict], n_pricing: int) -> List[dict]:
+def equal_observation_results(
+    aggregate_rows: List[dict],
+    n_pricing: int,
+    n_pilot: int,
+    n_training: int,
+) -> List[dict]:
     rows = []
     for r in aggregate_rows:
         method = r["method"]
@@ -734,18 +739,30 @@ def equal_observation_results(aggregate_rows: List[dict], n_pricing: int) -> Lis
         pricing_paths = n_pricing
         pilot_paths = 0
         target_training_paths = 0
+        shared_reference_training_paths = 0
         if method == "AV":
             pricing_paths = 2 * n_pricing
         elif method == "GCV":
-            pilot_paths = _safe_float(r.get("observation_variance"))
-            pilot_paths = int(pilot_paths) if pilot_paths is not None else 0
-            pilot_paths = 0 if pilot_paths < 0 else pilot_paths
+            pilot_paths = n_pilot
+        elif method == "NCV_SCRATCH":
+            target_training_paths = n_training
+        elif method == "NCV_TRANSFER_BETA1":
+            shared_reference_training_paths = n_training
+        elif method == "NCV_TRANSFER_BETA":
+            shared_reference_training_paths = n_training
+            pilot_paths = n_pilot
         rows.append(
             {
                 "contract_id": r["contract_id"],
                 "method": method,
                 "pricing_observations": pricing_obs,
                 "pricing_simulated_paths": pricing_paths,
+                "pilot_paths": pilot_paths,
+                "target_training_paths": target_training_paths,
+                "shared_reference_training_paths": shared_reference_training_paths,
+                "total_simulated_paths_per_valuation_q1": (
+                    pricing_paths + pilot_paths + target_training_paths + shared_reference_training_paths
+                ),
                 "note": "Equal pricing observations; total simulated paths differ by method.",
             }
         )
@@ -1231,7 +1248,7 @@ def run_stage8(
         shared_rows.append(shared)
 
     agg_rows = aggregate_results(all_rows, high_prec_rows)
-    equal_obs_rows = equal_observation_results(agg_rows, n_pricing)
+    equal_obs_rows = equal_observation_results(agg_rows, n_pricing, n_pilot, n_training)
     equal_budget_rows = _equal_budget_empirical(agg_rows, n_training, n_pilot, n_pricing, q_values)
     matched_rows = matched_accuracy_results(agg_rows, fixed_target_se=0.05)
     rt_summary_rows = _runtime_summary(all_runtime_rows)
