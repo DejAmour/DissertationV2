@@ -314,6 +314,8 @@ def test_break_even_q_equals_one_uses_minimum_boundary_verification():
     assert out["verified_q"] is True
     assert out["verified_q_minus_1"] is True
     assert out["failure_reason"] == ""
+    assert out["baseline_setup_cost_s"] == 0.0
+    assert out["proposed_setup_cost_s"] == 2.0
     assert out["q_minus_1_verification_status"] == "not_applicable_minimum_q_boundary"
     assert out["cost_baseline_q_minus_1"] == "NA"
     assert out["cost_proposed_q_minus_1"] == "NA"
@@ -417,9 +419,13 @@ def test_break_even_changes_when_ncv_setup_cost_changes():
     assert row_low["verified_q_minus_1"] is True
     assert row_low["failure_reason"] == ""
     assert row_low["q_minus_1_verification_status"] == "not_applicable_minimum_q_boundary"
+    assert row_low["baseline_setup_cost_s"] == 0.0
+    assert row_low["proposed_setup_cost_s"] == 2.0
     assert row_high["break_even_q"] == 4
     assert row_high["verified_q"] is True
     assert row_high["verified_q_minus_1"] is True
+    assert row_high["baseline_setup_cost_s"] == 0.0
+    assert row_high["proposed_setup_cost_s"] == 20.0
     assert row_high["cost_proposed_q_minus_1"] == 35.0
     assert row_high["cost_baseline_q_minus_1"] == 30.0
     assert row_high["cost_proposed_q"] == 40.0
