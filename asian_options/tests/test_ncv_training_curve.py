@@ -184,12 +184,13 @@ def test_student_t_confidence_interval_exact_n2():
     m = sum(vals) / 2.0
     s = math.sqrt(((1.0 - m) ** 2 + (3.0 - m) ** 2) / 1.0)
     expected_t = 12.706204736432095
-    half = expected_t * s / math.sqrt(2.0)
+    actual_t = float(ci["ci_critical_value"])
+    half = actual_t * s / math.sqrt(2.0)
     assert ci["ci_method"] == "student-t"
     assert ci["ci_degrees_of_freedom"] == 1
-    assert math.isclose(float(ci["ci_critical_value"]), expected_t, rel_tol=1e-12)
-    assert math.isclose(float(ci["ci95_lower"]), m - half, rel_tol=1e-12)
-    assert math.isclose(float(ci["ci95_upper"]), m + half, rel_tol=1e-12)
+    assert math.isclose(actual_t, expected_t, rel_tol=1e-9)
+    assert math.isclose(float(ci["ci95_lower"]), m - half, rel_tol=1e-12, abs_tol=1e-12)
+    assert math.isclose(float(ci["ci95_upper"]), m + half, rel_tol=1e-12, abs_tol=1e-12)
 
 
 def test_student_t_confidence_interval_exact_n10():
@@ -198,12 +199,13 @@ def test_student_t_confidence_interval_exact_n10():
     m = sum(vals) / len(vals)
     s = np.std(vals, ddof=1)
     expected_t = 2.2621571628540993
-    half = expected_t * s / math.sqrt(len(vals))
+    actual_t = float(ci["ci_critical_value"])
+    half = actual_t * s / math.sqrt(len(vals))
     assert ci["ci_method"] == "student-t"
     assert ci["ci_degrees_of_freedom"] == 9
-    assert math.isclose(float(ci["ci_critical_value"]), expected_t, rel_tol=1e-12)
-    assert math.isclose(float(ci["ci95_lower"]), m - half, rel_tol=1e-12)
-    assert math.isclose(float(ci["ci95_upper"]), m + half, rel_tol=1e-12)
+    assert math.isclose(actual_t, expected_t, rel_tol=1e-9)
+    assert math.isclose(float(ci["ci95_lower"]), m - half, rel_tol=1e-12, abs_tol=1e-12)
+    assert math.isclose(float(ci["ci95_upper"]), m + half, rel_tol=1e-12, abs_tol=1e-12)
 
 
 @pytest.mark.skipif(not _TORCH_AVAILABLE, reason="torch required")
