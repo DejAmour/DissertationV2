@@ -1,0 +1,62 @@
+{
+  "profile": "smoke",
+  "description": "Smoke profile (fast)",
+  "base_seed": 42,
+  "n_replications": 2,
+  "n_training": 100,
+  "n_pilot": 50,
+  "n_pricing": 200,
+  "n_high_precision": 2000,
+  "m_monitoring": 12,
+  "amortised_q_values": [
+    1,
+    5
+  ],
+  "contracts": {
+    "reference": {
+      "K": 100.0,
+      "sigma": 0.2,
+      "T": 1.0
+    },
+    "strike_low": {
+      "K": 80.0,
+      "sigma": 0.2,
+      "T": 1.0
+    },
+    "strike_high": {
+      "K": 120.0,
+      "sigma": 0.2,
+      "T": 1.0
+    },
+    "volatility_low": {
+      "K": 100.0,
+      "sigma": 0.1,
+      "T": 1.0
+    },
+    "volatility_high": {
+      "K": 100.0,
+      "sigma": 0.5,
+      "T": 1.0
+    },
+    "maturity_short": {
+      "K": 100.0,
+      "sigma": 0.2,
+      "T": 0.5
+    },
+    "maturity_long": {
+      "K": 100.0,
+      "sigma": 0.2,
+      "T": 2.0
+    }
+  },
+  "seed_offsets": {
+    "reference_training": 1000,
+    "target_training": 3000,
+    "pilot": 4000,
+    "pricing": 5000,
+    "high_precision": 9000
+  },
+  "torch_available": false,
+  "commit_hash": "79cc62ceebe173bc096f7ce33fc73bbb9a6ddecd",
+  "timestamp_utc": "20260816T140258Z"
+}

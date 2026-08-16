@@ -1,0 +1,7 @@
+{
+  "profile": "dissertation",
+  "base_seed": 42,
+  "n_replications": 30,
+  "stable_summary_sha256": "99962755e39b33ac57ecfdd49fa932bb3ef450f321225c52071a67293cb41cd1",
+  "note": "Run the same profile twice with same base seed; hashes should match."
+}

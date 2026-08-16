@@ -1,0 +1,7 @@
+contract_id,change_type,mean_variance_reduction_from_beta_estimation,n_successful_replications
+strike_low,lower strike,nan,0
+strike_high,higher strike,nan,0
+volatility_low,lower volatility,nan,0
+volatility_high,higher volatility,nan,0
+maturity_short,shorter maturity,nan,0
+maturity_long,longer maturity,nan,0

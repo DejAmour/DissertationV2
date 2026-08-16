@@ -1,0 +1,7 @@
+{
+  "profile": "smoke",
+  "base_seed": 42,
+  "n_replications": 2,
+  "stable_summary_sha256": "a1e5ba5f36418e97e8f5f9772f53b9211a249d987d3e32d39ee4b15d71879681",
+  "note": "Run the same profile twice with same base seed; hashes should match."
+}
