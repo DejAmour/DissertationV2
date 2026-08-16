@@ -145,6 +145,21 @@ python scripts/run_stage8.py --profile dissertation --output-dir experiment_runs
 python scripts/run_stage8.py --profile dissertation --output-dir experiment_runs --empirical-equal-budget
 ```
 
+### NCV training-curve experiment (reference contract)
+
+```bash
+python scripts/run_ncv_training_curve.py --profile smoke --output-dir experiment_runs
+python scripts/run_ncv_training_curve.py --profile dissertation --output-dir experiment_runs
+```
+
+### NCV output-rescaling note
+
+The existing transferred control coefficient `beta` already performs scalar
+output rescaling. If `H̃(Z)=aH(Z)`, then
+`H̃(Z)-E[H̃(Z)] = a(H(Z)-E[H(Z)])`, so multiplying final-layer output weights
+by `a` is equivalent to setting `beta=a`. A separate physical output-weight
+rescaling estimator is therefore intentionally not added.
+
 ## Data source attribution
 
 - Series: `DCOILBRENTEU` (Daily Europe Brent Spot Price FOB, USD/barrel)
