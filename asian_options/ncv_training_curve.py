@@ -360,7 +360,7 @@ def _timed_mc_av_gcv(
     times_end_to_end: list[float] = []
     times_setup: list[float] = []
 
-    for _ in range(max(1, repeats)):
+    for rep_idx in range(max(1, repeats)):
         if method == "MC":
             res = standard_monte_carlo(cfg)
             times_end_to_end.append(float(res.end_to_end_runtime_seconds))
@@ -380,7 +380,7 @@ def _timed_mc_av_gcv(
         if method == "GCV":
             if gcv_pilot_fit is None:
                 gcv_pilot_fit = _fit_gcv_pilot_once(cfg, n_pilot)
-            rng = np.random.default_rng(cfg.seed + 1 + _)
+            rng = np.random.default_rng(cfg.seed + 1 + rep_idx)
             t0 = time.perf_counter()
             z = rng.standard_normal((cfg.n_paths, cfg.m))
             paths = simulate_paths(cfg, shocks=z)
@@ -910,7 +910,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
         gcv_bench = compute_gcv_benchmark(val_split, test_split, pilot_split, n_reporting=config.pricing_observations_for_reporting)
         gcv_timing_cfg = _make_reference_cfg(
             monitoring_dates=config.monitoring_dates,
-            n_paths=max(2, int(config.timing_path_counts[0])),
+            n_paths=max(2, int(config.pilot_paths)),
             seed=seeds["gcv_pilot"] + 991,
         )
         gcv_pilot_fit = _fit_gcv_pilot_once(gcv_timing_cfg, config.pilot_paths)
@@ -948,7 +948,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                     "runtime_projection_linearity_ratio": gcv_reporting_projection["runtime_projection_linearity_ratio"],
                     "runtime_projection_is_sufficiently_linear": gcv_reporting_projection["runtime_projection_is_sufficiently_linear"],
                     "runtime_projection_is_empirical_or_projected": gcv_reporting_projection["runtime_projection_is_empirical_or_projected"],
-                    "runtime_at_required_n_is_empirical_or_projected": "projected",
+                    "runtime_at_required_n_is_empirical_or_projected": gcv_reporting_projection["runtime_at_required_n_is_empirical_or_projected"],
                 }
             )
 
@@ -1070,6 +1070,9 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
         ]
         for profile in ncv_runtime_profiles:
             profile["timing_path_counts"] = "|".join(str(x) for x in config.timing_path_counts)
+        runtime_tensor_conversion_flag = bool(
+            any(bool(p.get("torch_tensor_conversion_inside_pricing_timing", False)) for p in ncv_runtime_profiles)
+        )
         ncv_reporting_projection = project_runtime_at_n(
             ncv_runtime_profiles,
             "NCV",
@@ -1126,8 +1129,8 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                     "runtime_projection_is_empirical_or_projected": ncv_reporting_projection["runtime_projection_is_empirical_or_projected"],
                     "runtime_projection_linearity_ratio": ncv_reporting_projection["runtime_projection_linearity_ratio"],
                     "runtime_projection_is_sufficiently_linear": ncv_reporting_projection["runtime_projection_is_sufficiently_linear"],
-                    "runtime_at_required_n_is_empirical_or_projected": "projected",
-                    "torch_tensor_conversion_inside_pricing_timing": True,
+                    "runtime_at_required_n_is_empirical_or_projected": ncv_reporting_projection["runtime_at_required_n_is_empirical_or_projected"],
+                    "torch_tensor_conversion_inside_pricing_timing": runtime_tensor_conversion_flag,
                     **diag,
                 }
                 per_replication_rows.append(row)
@@ -1190,6 +1193,15 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
         test_rows = [r for r in per_replication_rows if r["replication"] == rep and r["split"] == "test"]
         gcv_validation = next(gr for gr in gcv_rows if gr["replication"] == rep and gr["split"] == "validation")
         gcv_test = next(gr for gr in gcv_rows if gr["replication"] == rep and gr["split"] == "test")
+        ncv_runtime_projection_cache: dict[int, dict[str, Any]] = {}
+        gcv_runtime_projection_cache: dict[int, dict[str, Any]] = {}
+
+        def _project_cached(cache: dict[int, dict[str, Any]], profiles: list[dict[str, Any]], method: str, n_required: int) -> dict[str, Any]:
+            n_key = int(n_required)
+            if n_key not in cache:
+                cache[n_key] = project_runtime_at_n(profiles, method, n_key)
+            return cache[n_key]
+
         se_targets = [
             ("gcv_matched_at_reporting_n", float(gcv_validation["gcv_standard_error_at_reporting_n"])),
             ("fixed_se", 0.001),
@@ -1199,11 +1211,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                 per_checkpoint_costs = []
                 for r in validation_rows:
                     req_n = compute_required_paths(float(r["residual_variance"]), float(target_se))
-                    runtime_req = project_runtime_at_n(
-                        ncv_runtime_profiles,
-                        "NCV",
-                        req_n,
-                    )
+                    runtime_req = _project_cached(ncv_runtime_projection_cache, ncv_runtime_profiles, "NCV", req_n)
                     setup_cost = float(r["cumulative_training_runtime_s"])
                     marginal_pricing = float(runtime_req["projected_runtime_s"])
                     total_cost = setup_cost + int(q) * marginal_pricing
@@ -1213,30 +1221,18 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                 matched_test_row = next(rr for rr in test_rows if int(rr["checkpoint"]) == int(best_row["checkpoint"]))
 
                 test_required_n = compute_required_paths(float(matched_test_row["residual_variance"]), float(target_se))
-                test_runtime_req = project_runtime_at_n(
-                    ncv_runtime_profiles,
-                    "NCV",
-                    test_required_n,
-                )
+                test_runtime_req = _project_cached(ncv_runtime_projection_cache, ncv_runtime_profiles, "NCV", test_required_n)
                 test_setup = float(matched_test_row["cumulative_training_runtime_s"])
                 test_marginal = float(test_runtime_req["projected_runtime_s"])
                 test_total_cost = test_setup + int(q) * test_marginal
 
                 gcv_req = compute_required_paths(float(gcv_validation["gcv_residual_variance"]), float(target_se))
-                gcv_runtime_req = project_runtime_at_n(
-                    baseline_runtime_profiles,
-                    "GCV",
-                    gcv_req,
-                )
+                gcv_runtime_req = _project_cached(gcv_runtime_projection_cache, baseline_runtime_profiles, "GCV", gcv_req)
                 gcv_setup = float(gcv_validation["gcv_pilot_runtime_s"])
                 gcv_marginal = float(gcv_runtime_req["projected_runtime_s"])
                 gcv_cost = gcv_setup + int(q) * gcv_marginal
                 gcv_test_req = compute_required_paths(float(gcv_test["gcv_residual_variance"]), float(target_se))
-                gcv_test_runtime_req = project_runtime_at_n(
-                    baseline_runtime_profiles,
-                    "GCV",
-                    gcv_test_req,
-                )
+                gcv_test_runtime_req = _project_cached(gcv_runtime_projection_cache, baseline_runtime_profiles, "GCV", gcv_test_req)
                 gcv_test_setup = float(gcv_test["gcv_pilot_runtime_s"])
                 gcv_test_marginal = float(gcv_test_runtime_req["projected_runtime_s"])
                 gcv_test_cost = gcv_test_setup + int(q) * gcv_test_marginal
