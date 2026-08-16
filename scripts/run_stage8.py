@@ -1332,30 +1332,49 @@ def compute_reference_precision_diagnostics(
     return rows
 
 
-def _solve_break_even(initial_cost: Optional[float], baseline_marginal: Optional[float], proposed_marginal: Optional[float]) -> dict:
-    if initial_cost is None or baseline_marginal is None or proposed_marginal is None:
+def _solve_break_even(
+    initial_cost: Optional[float],
+    baseline_marginal: Optional[float],
+    proposed_marginal: Optional[float],
+    baseline_setup_cost: Optional[float] = None,
+    proposed_setup_cost: Optional[float] = None,
+) -> dict:
+    tol = 1e-9
+    baseline_setup = 0.0 if baseline_setup_cost is None else baseline_setup_cost
+    proposed_setup = initial_cost if proposed_setup_cost is None else proposed_setup_cost
+
+    if proposed_setup is None or baseline_marginal is None or proposed_marginal is None:
         return {
             "break_even_q": "NA",
             "failure_reason": "missing_runtime_input",
             "verified_q_minus_1": False,
             "verified_q": False,
+            "baseline_setup_cost_s": baseline_setup,
+            "proposed_setup_cost_s": proposed_setup,
+            "q_minus_1_verification_status": "missing_runtime_input",
         }
 
-    if initial_cost < 0:
+    if proposed_setup < 0 or baseline_setup < 0:
         return {
             "break_even_q": "NA",
             "failure_reason": "negative_initial_cost",
             "verified_q_minus_1": False,
             "verified_q": False,
+            "baseline_setup_cost_s": baseline_setup,
+            "proposed_setup_cost_s": proposed_setup,
+            "q_minus_1_verification_status": "not_verified",
         }
 
     denom = baseline_marginal - proposed_marginal
-    if denom == 0:
+    if abs(denom) <= tol:
         return {
             "break_even_q": "NA",
-            "failure_reason": "positive_initial_cost_and_equal_marginal_cost" if initial_cost > 0 else "equal_marginal_cost",
+            "failure_reason": "positive_initial_cost_and_equal_marginal_cost" if (proposed_setup - baseline_setup) > tol else "equal_marginal_cost",
             "verified_q_minus_1": False,
             "verified_q": False,
+            "baseline_setup_cost_s": baseline_setup,
+            "proposed_setup_cost_s": proposed_setup,
+            "q_minus_1_verification_status": "not_verified",
         }
     if denom < 0:
         return {
@@ -1363,25 +1382,37 @@ def _solve_break_even(initial_cost: Optional[float], baseline_marginal: Optional
             "failure_reason": "positive_initial_cost_and_higher_marginal_cost",
             "verified_q_minus_1": False,
             "verified_q": False,
+            "baseline_setup_cost_s": baseline_setup,
+            "proposed_setup_cost_s": proposed_setup,
+            "q_minus_1_verification_status": "not_verified",
         }
 
-    q = max(1, int(math.ceil(initial_cost / denom)))
+    q = max(1, int(math.ceil((proposed_setup - baseline_setup) / denom)))
 
     def c_base(Q: int) -> float:
-        return Q * baseline_marginal
+        return baseline_setup + Q * baseline_marginal
 
     def c_prop(Q: int) -> float:
-        return initial_cost + Q * proposed_marginal
+        return proposed_setup + Q * proposed_marginal
 
-    q_minus_1 = max(1, q - 1)
-    verify_prev = c_prop(q_minus_1) > c_base(q_minus_1)
-    verify_now = c_prop(q) <= c_base(q)
+    if q == 1:
+        verify_prev = True
+        q_minus_1_status = "not_applicable_minimum_q_boundary"
+        q_minus_1 = None
+    else:
+        q_minus_1 = q - 1
+        verify_prev = c_prop(q_minus_1) > (c_base(q_minus_1) + tol)
+        q_minus_1_status = "verified_against_q_minus_1" if verify_prev else "failed_at_q_minus_1"
+    verify_now = c_prop(q) <= (c_base(q) + tol)
     if not (verify_prev and verify_now):
         return {
             "break_even_q": "NA",
             "failure_reason": "verification_failed_at_q_minus_1_or_q",
             "verified_q_minus_1": verify_prev,
             "verified_q": verify_now,
+            "baseline_setup_cost_s": baseline_setup,
+            "proposed_setup_cost_s": proposed_setup,
+            "q_minus_1_verification_status": q_minus_1_status,
         }
 
     return {
@@ -1389,8 +1420,11 @@ def _solve_break_even(initial_cost: Optional[float], baseline_marginal: Optional
         "failure_reason": "",
         "verified_q_minus_1": verify_prev,
         "verified_q": verify_now,
-        "cost_baseline_q_minus_1": c_base(q_minus_1),
-        "cost_proposed_q_minus_1": c_prop(q_minus_1),
+        "baseline_setup_cost_s": baseline_setup,
+        "proposed_setup_cost_s": proposed_setup,
+        "q_minus_1_verification_status": q_minus_1_status,
+        "cost_baseline_q_minus_1": c_base(q_minus_1) if q_minus_1 is not None else "NA",
+        "cost_proposed_q_minus_1": c_prop(q_minus_1) if q_minus_1 is not None else "NA",
         "cost_baseline_q": c_base(q),
         "cost_proposed_q": c_prop(q),
     }
@@ -1409,6 +1443,8 @@ def compute_break_even_tables(
     for cid in TARGET_IDS:
         gcv = _safe_float(agg.get((cid, "GCV"), {}).get("marginal_runtime_s_median"))
         gcv_mean = _safe_float(agg.get((cid, "GCV"), {}).get("marginal_runtime_s_mean"))
+        gcv_setup = _safe_float(agg.get((cid, "GCV"), {}).get("pilot_runtime_s_median")) or 0.0
+        gcv_setup_mean = _safe_float(agg.get((cid, "GCV"), {}).get("pilot_runtime_s_mean")) or 0.0
         scratch_marg = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("marginal_runtime_s_median"))
         scratch_marg_mean = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("marginal_runtime_s_mean"))
         scratch_init = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("ncv_setup_cost_s_median"))
@@ -1428,8 +1464,20 @@ def compute_break_even_tables(
             ("NCV_TRANSFER_BETA", shared_train_median, tb_marg, shared_train_median, tb_marg_mean),
         ]
         for method, init_c, marg, init_c_mean, marg_mean in comparisons:
-            be = _solve_break_even(init_c, gcv, marg)
-            be_mean = _solve_break_even(init_c_mean, gcv_mean, marg_mean)
+            be = _solve_break_even(
+                init_c,
+                gcv,
+                marg,
+                baseline_setup_cost=gcv_setup,
+                proposed_setup_cost=init_c,
+            )
+            be_mean = _solve_break_even(
+                init_c_mean,
+                gcv_mean,
+                marg_mean,
+                baseline_setup_cost=gcv_setup_mean,
+                proposed_setup_cost=init_c_mean,
+            )
             equal_obs_rows.append(
                 {
                     "contract_id": cid,
@@ -1473,16 +1521,32 @@ def compute_break_even_tables(
                         "failure_reason": "missing_runtime_input",
                         "verified_q_minus_1": False,
                         "verified_q": False,
+                        "baseline_setup_cost_s": "NA",
+                        "proposed_setup_cost_s": _safe_float(r.get("one_time_runtime_s")),
+                        "q_minus_1_verification_status": "missing_runtime_input",
                     }
                 )
                 continue
             baseline = _safe_float(gcv_row.get("marginal_runtime_s"))
             proposed = _safe_float(r.get("marginal_runtime_s"))
+            baseline_setup = _safe_float(gcv_row.get("one_time_runtime_s")) or 0.0
             init_c = _safe_float(r.get("one_time_runtime_s"))
             baseline_mean = _safe_float(gcv_row.get("projected_pricing_runtime_s_mean_sensitivity"))
             proposed_mean = _safe_float(r.get("projected_pricing_runtime_s_mean_sensitivity"))
-            be = _solve_break_even(init_c, baseline, proposed)
-            be_mean = _solve_break_even(init_c, baseline_mean, proposed_mean)
+            be = _solve_break_even(
+                init_c,
+                baseline,
+                proposed,
+                baseline_setup_cost=baseline_setup,
+                proposed_setup_cost=init_c,
+            )
+            be_mean = _solve_break_even(
+                init_c,
+                baseline_mean,
+                proposed_mean,
+                baseline_setup_cost=baseline_setup,
+                proposed_setup_cost=init_c,
+            )
             rows.append(
                 {
                     "contract_id": cid,
