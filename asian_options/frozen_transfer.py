@@ -244,7 +244,8 @@ def ncv_transfer_beta1(
     target_cfg: ModelConfig,
     pricing_seed: int,
     n_pricing: int,
-    training_runtime_s: float = 0.0,
+    shared_reference_training_runtime_s: float = 0.0,
+    shared_reference_training_paths: int = 0,
 ) -> dict:
     """
     NCV_TRANSFER_BETA1: Frozen reference network with beta=1.
@@ -270,8 +271,10 @@ def ncv_transfer_beta1(
         Seed for pricing shocks.
     n_pricing : int
         Number of pricing paths.
-    training_runtime_s : float
-        Reference training wall-clock time (for end-to-end accounting).
+    shared_reference_training_runtime_s : float
+        Reference training wall-clock time, stored for shared-cost accounting.
+    shared_reference_training_paths : int
+        Number of paths used to train the shared reference network.
 
     Returns
     -------
@@ -320,7 +323,17 @@ def ncv_transfer_beta1(
     # Verify hash again after evaluation (integrity check)
     verify_frozen_hash(frozen_network, frozen_hash)
 
-    end_to_end_s = training_runtime_s + pricing_runtime_s
+    cov_f_c0 = float(np.cov(payoffs, c0_vals, ddof=1)[0, 1]) if n_obs >= 2 else float("nan")
+    var_f = float(np.var(payoffs, ddof=1)) if n_obs >= 2 else float("nan")
+    var_c0 = float(np.var(c0_vals, ddof=1)) if n_obs >= 2 else float("nan")
+    residual_beta1 = payoffs - c0_vals
+    residual_var_beta1 = float(np.var(residual_beta1, ddof=1)) if n_obs >= 2 else float("nan")
+    if var_c0 > 0 and math.isfinite(var_c0):
+        beta_opt = cov_f_c0 / var_c0
+        residual_var_opt = var_f - (cov_f_c0 ** 2) / var_c0
+    else:
+        beta_opt = float("nan")
+        residual_var_opt = float("nan")
 
     return {
         "method": "NCV_TRANSFER_BETA1",
@@ -334,14 +347,31 @@ def ncv_transfer_beta1(
         "pricing_observations": n_obs,
         "pricing_simulated_paths": n_obs,
         "pilot_paths": 0,
-        "training_paths": 0,  # reference training charged once at portfolio level
+        "target_training_paths": 0,
         "total_simulated_paths": n_obs,
         "beta": 1.0,
+        "beta_hat": float("nan"),
+        "beta_assumed": 1.0,
         "corr_f_c0": corr_f_c0,
+        "cov_payoff_control": cov_f_c0,
+        "var_payoff": var_f,
+        "var_control": var_c0,
+        "pilot_var_control": float("nan"),
+        "residual_variance": residual_var_beta1,
+        "optimal_residual_variance": residual_var_opt,
+        "variance_change_beta1_vs_optimal": (
+            residual_var_beta1 - residual_var_opt
+            if math.isfinite(residual_var_beta1) and math.isfinite(residual_var_opt)
+            else float("nan")
+        ),
+        "variance_reduction_from_beta_estimation": float("nan"),
         "e_h0": e_h0,
         "pricing_runtime_s": pricing_runtime_s,
-        "training_runtime_s": training_runtime_s,
-        "end_to_end_runtime_s": end_to_end_s,
+        "pilot_runtime_s": 0.0,
+        "target_training_runtime_s": 0.0,
+        "shared_reference_training_runtime_s": shared_reference_training_runtime_s,
+        "shared_reference_training_paths": shared_reference_training_paths,
+        "end_to_end_runtime_s": pricing_runtime_s,
         "param_hash": frozen_hash,
         "hash_verified": True,
     }
@@ -356,7 +386,8 @@ def ncv_transfer_beta(
     pricing_seed: int,
     n_pilot: int,
     n_pricing: int,
-    training_runtime_s: float = 0.0,
+    shared_reference_training_runtime_s: float = 0.0,
+    shared_reference_training_paths: int = 0,
     near_zero_threshold: float = 1e-12,
 ) -> dict:
     """
@@ -389,8 +420,10 @@ def ncv_transfer_beta(
         Number of pilot paths.
     n_pricing : int
         Number of pricing paths.
-    training_runtime_s : float
-        Reference training time for end-to-end accounting.
+    shared_reference_training_runtime_s : float
+        Reference training runtime, stored as a shared cost (not per-valuation).
+    shared_reference_training_paths : int
+        Number of paths used for shared reference training.
     near_zero_threshold : float
         Var(C0) below this value triggers NearZeroVarianceError.
 
@@ -475,7 +508,12 @@ def ncv_transfer_beta(
     # Verify hash unchanged after evaluation
     verify_frozen_hash(frozen_network, frozen_hash)
 
-    end_to_end_s = training_runtime_s + pilot_runtime_s + pricing_runtime_s
+    var_f_pilot = float(np.var(payoffs_pilot, ddof=1))
+    residual_var_opt = var_f_pilot - (cov_fc0 ** 2) / var_c0
+    residual_beta1_pilot = payoffs_pilot - c0_pilot
+    residual_var_beta1_pilot = float(np.var(residual_beta1_pilot, ddof=1))
+    residual_pilot = payoffs_pilot - beta_hat * c0_pilot
+    residual_var_hat_pilot = float(np.var(residual_pilot, ddof=1))
 
     return {
         "method": "NCV_TRANSFER_BETA",
@@ -489,16 +527,30 @@ def ncv_transfer_beta(
         "pricing_observations": n_obs,
         "pricing_simulated_paths": n_obs,
         "pilot_paths": n_pilot,
-        "training_paths": 0,  # charged once at portfolio level
+        "target_training_paths": 0,
         "total_simulated_paths": n_pilot + n_pricing,
         "beta": beta_hat,
+        "beta_hat": beta_hat,
+        "beta_assumed": float("nan"),
         "var_c0_pilot": var_c0,
+        "pilot_var_control": var_c0,
+        "cov_payoff_control": cov_fc0,
         "corr_f_c0": corr_f_c0,
+        "var_payoff": var_f_pilot,
+        "var_control": var_c0,
+        "residual_variance": residual_var_hat_pilot,
+        "optimal_residual_variance": residual_var_opt,
+        "variance_change_beta1_vs_optimal": residual_var_beta1_pilot - residual_var_opt,
+        "variance_reduction_from_beta_estimation": (
+            residual_var_beta1_pilot - residual_var_hat_pilot
+        ),
         "e_h0": e_h0,
         "pricing_runtime_s": pricing_runtime_s,
         "pilot_runtime_s": pilot_runtime_s,
-        "training_runtime_s": training_runtime_s,
-        "end_to_end_runtime_s": end_to_end_s,
+        "target_training_runtime_s": 0.0,
+        "shared_reference_training_runtime_s": shared_reference_training_runtime_s,
+        "shared_reference_training_paths": shared_reference_training_paths,
+        "end_to_end_runtime_s": pilot_runtime_s + pricing_runtime_s,
         "param_hash": frozen_hash,
         "hash_verified": True,
     }

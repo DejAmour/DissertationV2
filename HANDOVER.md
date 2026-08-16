@@ -27,7 +27,7 @@
 
 ### 3. Empirical results
 
-NCV-based methods (NCV_SCRATCH, NCV_TRANSFER_BETA1, NCV_TRANSFER_BETA) require PyTorch. In the current environment (no torch), these methods produce `error='torch_not_available'` rows. All non-NCV estimators (MC, AV, GCV) run successfully for all 7 contracts.
+NCV-based methods (NCV_SCRATCH, NCV_TRANSFER_BETA1, NCV_TRANSFER_BETA) require PyTorch. The actual availability is environment-specific and is now recorded per run in `environment_snapshot.json` and echoed in the generated run-level `handover.md`.
 
 ### 4. Cautious interpretations
 
@@ -36,8 +36,8 @@ NCV-based methods (NCV_SCRATCH, NCV_TRANSFER_BETA1, NCV_TRANSFER_BETA) require P
 
 ### 5. Limitations / risks
 
-- Torch not installed in CI environment; NCV methods produce error rows.
-- Dissertation profile requires torch and ~30 replications of compute time.
+- If Torch is unavailable in the runtime environment, NCV methods produce explicit error rows (`torch_not_available`) while MC/AV/GCV still run.
+- Dissertation profile requires substantially more compute than smoke and should be planned using the runtime estimate in the Stage 8 run output.
 
 ### Commands
 
