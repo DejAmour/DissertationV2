@@ -27,6 +27,7 @@ SEED_OFFSETS = {
     "gcv_pilot": 4_000,
 }
 TRAINING_CURVE_SELECTED_NCV_EPOCH = 25
+TRAINING_CURVE_SELECTED_NCV_EPOCH_SOURCE = "training_curve_validation_tuning"
 
 
 @dataclass(frozen=True)
@@ -63,12 +64,17 @@ def ncv_training_facts() -> dict[str, Any]:
         "learning_rate_default": 1e-2,
         "epoch_count_defaults": {
             "neural_cv.train_network": 200,
-            "stage8_scratch_and_reference": 100,
+            "stage8_scratch_and_reference": TRAINING_CURVE_SELECTED_NCV_EPOCH,
         },
+        "stage8_fixed_ncv_epoch_source": TRAINING_CURVE_SELECTED_NCV_EPOCH_SOURCE,
         "weight_initialization": "Xavier-uniform for W1/W2, zero biases",
         "input_dimension": "m monitoring shocks (cfg.m; Stage 8 reference uses m=252)",
         "training_targets": "Discounted arithmetic Asian call payoff",
-        "validation_or_early_stopping": "No validation split and no early stopping in current training path",
+        "validation_or_early_stopping": (
+            "Generic neural_cv.train_network uses no online validation split and no online early stopping; "
+            "Stage 8 uses fixed 25 epochs selected by separate validation-based training-curve study, and "
+            "final Stage 8 test/pricing data do not select epoch"
+        ),
         "objective_preserved_for_training_curve": "MSE objective preserved",
     }
 
@@ -303,9 +309,13 @@ def compute_gcv_benchmark(validation_split: dict[str, np.ndarray], test_split: d
                 "gcv_control_only_pricing_runtime_s": pricing_runtime,
                 "gcv_control_only_per_observation_runtime_s": pricing_runtime / max(1, x.size),
                 "gcv_per_observation_runtime_s": pricing_runtime / max(1, x.size),
-                "path_and_payoff_runtime_s": pricing_runtime,
-                "control_evaluation_runtime_s": 0.0,
-                "estimator_reduction_runtime_s": 0.0,
+                "gcv_pricing_runtime_scope": "legacy_control_only_diagnostic_not_used_for_costing",
+                "gcv_end_to_end_pricing_runtime_s": pricing_runtime,
+                "gcv_end_to_end_runtime_per_observation_s": pricing_runtime / max(1, x.size),
+                "path_and_payoff_runtime_s": "NA",
+                "control_evaluation_runtime_s": "NA",
+                "estimator_reduction_runtime_s": "NA",
+                "component_runtime_measurement_status": "not_separately_measured",
                 "end_to_end_pricing_runtime_s": pricing_runtime,
                 "end_to_end_runtime_per_observation_s": pricing_runtime / max(1, x.size),
                 "gcv_price_estimate": float(np.mean(corrected)),
@@ -683,6 +693,58 @@ def validate_output_schema(output_dir: Path, *, include_report_in_presence_check
     }
 
 
+def _is_na_marker(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().upper() == "NA"
+    return False
+
+
+def _is_finite_non_negative_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and math.isfinite(float(value)) and float(value) >= 0.0
+
+
+def _validate_component_runtime_fields(row: dict[str, Any], rid: str) -> list[str]:
+    errors: list[str] = []
+    status = row.get("component_runtime_measurement_status")
+    component_fields = (
+        "path_and_payoff_runtime_s",
+        "control_evaluation_runtime_s",
+        "estimator_reduction_runtime_s",
+    )
+    values = {name: row.get(name) for name in component_fields}
+
+    if status == "not_separately_measured":
+        bad = [name for name, value in values.items() if not _is_na_marker(value)]
+        if bad:
+            errors.append(f"{rid}: component_runtime_measurement_status=not_separately_measured but fields are populated: {bad}")
+        return errors
+
+    if status == "measured_separately":
+        bad = [name for name, value in values.items() if not _is_finite_non_negative_number(value)]
+        if bad:
+            errors.append(f"{rid}: component_runtime_measurement_status=measured_separately but fields are missing/non-finite: {bad}")
+        return errors
+
+    if any(_is_na_marker(v) for v in values.values()):
+        errors.append(f"{rid}: NA component runtime requires explicit component_runtime_measurement_status")
+    else:
+        errors.append(f"{rid}: missing or invalid component_runtime_measurement_status")
+    return errors
+
+
+def _runtime_warning_key(row: dict[str, Any], method: str) -> tuple[Any, ...]:
+    return (
+        row.get("replication"),
+        method,
+        row.get("runtime_projection_method"),
+        row.get("timing_path_counts"),
+        row.get("timing_repeats"),
+        row.get("runtime_projection_basis_n"),
+    )
+
+
 def validate_numeric_content(
     per_replication_rows: list[dict[str, Any]],
     gcv_rows: list[dict[str, Any]],
@@ -690,10 +752,8 @@ def validate_numeric_content(
 ) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
-    required_non_negative = (
-        "path_and_payoff_runtime_s",
-        "control_evaluation_runtime_s",
-        "estimator_reduction_runtime_s",
+    warning_keys: set[tuple[Any, ...]] = set()
+    required_primary_non_negative = (
         "end_to_end_pricing_runtime_s",
         "ncv_end_to_end_runtime_per_observation_s",
         "cumulative_training_runtime_s",
@@ -708,20 +768,38 @@ def validate_numeric_content(
         rv = row.get("residual_variance")
         if not isinstance(rv, (int, float)) or not math.isfinite(float(rv)):
             errors.append(f"{rid}: non-finite residual_variance")
-        for name in required_non_negative:
+        for name in required_primary_non_negative:
             val = row.get(name)
             if not isinstance(val, (int, float)) or not math.isfinite(float(val)):
                 errors.append(f"{rid}: non-finite {name}")
             elif float(val) < 0.0:
                 errors.append(f"{rid}: negative {name}")
+        errors.extend(_validate_component_runtime_fields(row, rid))
         if row.get("runtime_projection_is_sufficiently_linear") is False:
-            warnings.append(f"{rid}: runtime projection not sufficiently linear; piecewise projection used")
+            key = _runtime_warning_key(row, "NCV")
+            if key not in warning_keys:
+                warnings.append(
+                    f"rep={row.get('replication')},method=NCV,timing_path_counts={row.get('timing_path_counts')}: "
+                    "runtime projection not sufficiently linear; piecewise projection used"
+                )
+                warning_keys.add(key)
     for row in gcv_rows:
         rid = f"rep={row.get('replication')},split={row.get('split')}"
         for name in ("gcv_residual_variance", "end_to_end_pricing_runtime_s", "end_to_end_runtime_per_observation_s"):
             val = row.get(name)
             if not isinstance(val, (int, float)) or not math.isfinite(float(val)):
                 errors.append(f"{rid}: non-finite {name}")
+            elif float(val) < 0.0:
+                errors.append(f"{rid}: negative {name}")
+        errors.extend(_validate_component_runtime_fields(row, rid))
+        if row.get("runtime_projection_is_sufficiently_linear") is False:
+            key = _runtime_warning_key(row, "GCV")
+            if key not in warning_keys:
+                warnings.append(
+                    f"rep={row.get('replication')},method=GCV,timing_path_counts={row.get('timing_path_counts')}: "
+                    "runtime projection not sufficiently linear; piecewise projection used"
+                )
+                warning_keys.add(key)
     for row in optimal_rows:
         rid = f"rep={row.get('replication')},cp={row.get('checkpoint')},Q={row.get('Q')}"
         for name in ("required_pricing_observations", "setup_cost_s", "marginal_pricing_cost_s", "projected_total_cost_s"):
@@ -744,10 +822,11 @@ def build_handover_text(config: TrainingCurveConfig, facts: dict[str, Any]) -> s
             f"- Optimizer: {facts['optimizer']}",
             f"- Learning rate: {facts['learning_rate_default']}",
             f"- Epoch defaults: {facts['epoch_count_defaults']}",
+            f"- Stage 8 fixed epoch source: {facts['stage8_fixed_ncv_epoch_source']}",
             f"- Initialization: {facts['weight_initialization']}",
             f"- Input dimension: {facts['input_dimension']}",
             f"- Targets: {facts['training_targets']}",
-            f"- Validation/early stopping in current path: {facts['validation_or_early_stopping']}",
+            f"- Validation/early stopping semantics: {facts['validation_or_early_stopping']}",
             "",
             "## Training-curve experiment scope",
             f"- Profile: {config.profile}",
@@ -771,6 +850,18 @@ def build_handover_text(config: TrainingCurveConfig, facts: dict[str, Any]) -> s
             "",
         ]
     )
+
+
+def _fixed_checkpoint_plot_descriptor(checkpoints: list[int], fixed_checkpoint: int) -> dict[str, Any]:
+    cp_set = {int(cp) for cp in checkpoints}
+    fixed_cp = int(fixed_checkpoint)
+    if fixed_cp in cp_set:
+        return {"line_epoch": fixed_cp, "line_label": f"fixed={fixed_cp}", "annotation": ""}
+    return {
+        "line_epoch": None,
+        "line_label": "",
+        "annotation": f"Stage 8 fixed checkpoint = {fixed_cp} (outside smoke range)",
+    }
 
 
 def _plot_summary_figure(
@@ -860,7 +951,25 @@ def _plot_summary_figure(
             gcv_n = compute_required_paths(gcv_var, target_se)
             gcv_cost = compute_total_cost(0.0, gcv_n, gcv_rate, q)
             axes[2].axhline(gcv_cost, linestyle="--", linewidth=0.8, alpha=0.6)
-    axes[2].axvline(fixed_checkpoint, linestyle=":", color="black", linewidth=1.0, label=f"fixed={fixed_checkpoint}")
+    fixed_desc = _fixed_checkpoint_plot_descriptor(checkpoints, fixed_checkpoint)
+    if fixed_desc["line_epoch"] is not None:
+        axes[2].axvline(
+            fixed_desc["line_epoch"],
+            linestyle=":",
+            color="black",
+            linewidth=1.0,
+            label=fixed_desc["line_label"],
+        )
+    elif fixed_desc["annotation"]:
+        axes[2].text(
+            0.02,
+            0.98,
+            fixed_desc["annotation"],
+            transform=axes[2].transAxes,
+            ha="left",
+            va="top",
+            fontsize=9,
+        )
     axes[2].set_xlabel("Epoch")
     axes[2].set_ylabel("Projected total cost (end-to-end)")
     axes[2].set_yscale("log")
@@ -948,13 +1057,17 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                 {
                     "replication": rep,
                     **gr,
-                    "path_and_payoff_runtime_s": gcv_reporting_projection["projected_runtime_s"],
-                    "control_evaluation_runtime_s": 0.0,
-                    "estimator_reduction_runtime_s": 0.0,
+                    "path_and_payoff_runtime_s": "NA",
+                    "control_evaluation_runtime_s": "NA",
+                    "estimator_reduction_runtime_s": "NA",
+                    "component_runtime_measurement_status": "not_separately_measured",
                     "end_to_end_pricing_runtime_s": gcv_reporting_projection["projected_runtime_s"],
                     "end_to_end_runtime_per_observation_s": gcv_reporting_projection["projected_per_observation_s"],
+                    "gcv_end_to_end_pricing_runtime_s": gcv_reporting_projection["projected_runtime_s"],
+                    "gcv_end_to_end_runtime_per_observation_s": gcv_reporting_projection["projected_per_observation_s"],
                     "gcv_pilot_runtime_s_end_to_end": gcv_pilot_fit["pilot_runtime_s"],
                     "gcv_pilot_runtime_s": gcv_pilot_fit["pilot_runtime_s"],
+                    "gcv_pricing_runtime_scope": "legacy_control_only_diagnostic_not_used_for_costing",
                     "timing_path_counts": "|".join(str(x) for x in config.timing_path_counts),
                     "timing_repeats": int(config.timing_repeats),
                     "runtime_projection_basis_n": "|".join(str(x) for x in gcv_reporting_projection["runtime_projection_basis_n"]),
@@ -1148,9 +1261,10 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                     "validation_generation_and_evaluation_runtime_cost_scope": (
                         "research_tuning_overhead_excluded_from_operational_setup_cost"
                     ),
-                    "path_and_payoff_runtime_s": ncv_reporting_projection["projected_runtime_s"],
-                    "control_evaluation_runtime_s": 0.0,
-                    "estimator_reduction_runtime_s": 0.0,
+                    "path_and_payoff_runtime_s": "NA",
+                    "control_evaluation_runtime_s": "NA",
+                    "estimator_reduction_runtime_s": "NA",
+                    "component_runtime_measurement_status": "not_separately_measured",
                     "end_to_end_pricing_runtime_s": ncv_reporting_projection["projected_runtime_s"],
                     "ncv_end_to_end_runtime_per_observation_s": ncv_reporting_projection["projected_per_observation_s"],
                     "timing_path_counts": "|".join(str(x) for x in config.timing_path_counts),
@@ -1277,7 +1391,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                         "target_se": float(target_se),
                         "Q": int(q),
                         "checkpoint": int(best_row["checkpoint"]),
-                        "ncv_epoch_source": "training_curve_validation_tuning",
+                        "ncv_epoch_source": TRAINING_CURVE_SELECTED_NCV_EPOCH_SOURCE,
                         "fixed_ncv_epoch_for_stage8": TRAINING_CURVE_SELECTED_NCV_EPOCH,
                         "setup_cost_s": best_setup,
                         "setup_reuse_assumption": (
@@ -1348,6 +1462,10 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
 
     env = collect_environment_metadata()
     env["seed"] = config.base_seed
+    env_warnings: list[str] = []
+    if config.profile == "dissertation" and not bool(env.get("virtual_environment_active", False)):
+        env_warnings.append("dissertation_profile_running_outside_virtual_environment")
+    env["warnings"] = env_warnings
 
     _write_json(out_dir / "training_curve_config.json", config_payload)
     _write_json(out_dir / "training_curve_environment.json", env)
@@ -1365,7 +1483,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
         gcv_rows,
         target_se=float(config.se_targets[0]) if config.se_targets else 0.001,
         q_values=config.q_values,
-        fixed_checkpoint=TRAINING_CURVE_SELECTED_NCV_EPOCH if TRAINING_CURVE_SELECTED_NCV_EPOCH in config.checkpoints else int(config.checkpoints[0]),
+        fixed_checkpoint=TRAINING_CURVE_SELECTED_NCV_EPOCH,
     )
 
     (out_dir / "TRAINING_CURVE_HANDOVER.md").write_text(build_handover_text(config, facts), encoding="utf-8")
@@ -1378,6 +1496,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
     numeric_errors, numeric_warnings = validate_numeric_content(per_replication_rows, gcv_rows, optimal_rows)
     validation_report["errors"].extend(numeric_errors)
     validation_report["warnings"].extend(numeric_warnings)
+    validation_report["warnings"].extend(env_warnings)
     validation_report["all_present"] = all(validation_report["exists"].values())
     validation_report["passed"] = validation_report["all_present"] and len(validation_report["errors"]) == 0
     validation_report.update(

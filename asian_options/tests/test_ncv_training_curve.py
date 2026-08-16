@@ -8,6 +8,9 @@ import numpy as np
 import pytest
 
 from asian_options.ncv_training_curve import (
+    TRAINING_CURVE_SELECTED_NCV_EPOCH,
+    TRAINING_CURVE_SELECTED_NCV_EPOCH_SOURCE,
+    _fixed_checkpoint_plot_descriptor,
     TrainingCurveConfig,
     build_seed_manifest,
     compute_ncv_setup_cost,
@@ -16,6 +19,7 @@ from asian_options.ncv_training_curve import (
     compute_total_cost,
     compute_gcv_benchmark,
     ncv_training_facts,
+    project_runtime_at_n,
     profile_config,
     required_output_files,
     replication_seeds,
@@ -138,6 +142,21 @@ def test_ncv_training_facts_reflect_current_objective_and_architecture():
     assert "MSELoss" in facts["loss_function"]
     assert "Adam" in facts["optimizer"]
     assert facts["hidden_layer_width_default"] == 32
+    assert facts["epoch_count_defaults"]["stage8_scratch_and_reference"] == TRAINING_CURVE_SELECTED_NCV_EPOCH
+    assert facts["stage8_fixed_ncv_epoch_source"] == TRAINING_CURVE_SELECTED_NCV_EPOCH_SOURCE
+
+
+def test_fixed_checkpoint_plot_descriptor_handles_out_of_range_and_in_range():
+    smoke = _fixed_checkpoint_plot_descriptor([0, 2, 5, 10], TRAINING_CURVE_SELECTED_NCV_EPOCH)
+    assert smoke["line_epoch"] is None
+    assert smoke["line_label"] == ""
+    assert "outside smoke range" in smoke["annotation"]
+    assert "fixed checkpoint = 25" in smoke["annotation"]
+
+    dissertation = _fixed_checkpoint_plot_descriptor([0, 10, 25, 50], TRAINING_CURVE_SELECTED_NCV_EPOCH)
+    assert dissertation["line_epoch"] == 25
+    assert dissertation["line_label"] == "fixed=25"
+    assert dissertation["annotation"] == ""
 
 
 @pytest.mark.skipif(not _TORCH_AVAILABLE, reason="torch required")
@@ -256,6 +275,12 @@ def test_tiny_run_outputs_schema_and_checkpoint_properties(tmp_path, monkeypatch
     assert report["report_present_post_write"] is True
     assert report["exists"]["training_curve_validation_report.json"] is True
 
+    with (out_dir / "training_curve_config.json").open() as fh:
+        cfg_payload = json.load(fh)
+    facts_payload = cfg_payload["ncv_training_facts"]
+    assert facts_payload["epoch_count_defaults"]["stage8_scratch_and_reference"] == 25
+    assert facts_payload["stage8_fixed_ncv_epoch_source"] == "training_curve_validation_tuning"
+
 
 def test_validation_report_self_check_pre_and_post_write(tmp_path):
     for name in required_output_files():
@@ -290,6 +315,7 @@ def test_numeric_validation_fails_for_non_finite_timing_or_variance():
         "path_and_payoff_runtime_s": 1.0,
         "control_evaluation_runtime_s": 1.0,
         "estimator_reduction_runtime_s": 0.0,
+        "component_runtime_measurement_status": "measured_separately",
         "end_to_end_pricing_runtime_s": 2.0,
         "ncv_end_to_end_runtime_per_observation_s": 0.01,
         "cumulative_training_runtime_s": 1.0,
@@ -300,7 +326,17 @@ def test_numeric_validation_fails_for_non_finite_timing_or_variance():
         "ncv_setup_cost_s": 1.0,
         "runtime_projection_is_sufficiently_linear": True,
     }]
-    gcv_rows = [{"replication": 0, "split": "validation", "gcv_residual_variance": 1.0, "end_to_end_pricing_runtime_s": 1.0, "end_to_end_runtime_per_observation_s": float("nan")}]
+    gcv_rows = [{
+        "replication": 0,
+        "split": "validation",
+        "gcv_residual_variance": 1.0,
+        "path_and_payoff_runtime_s": "NA",
+        "control_evaluation_runtime_s": "NA",
+        "estimator_reduction_runtime_s": "NA",
+        "component_runtime_measurement_status": "not_separately_measured",
+        "end_to_end_pricing_runtime_s": 1.0,
+        "end_to_end_runtime_per_observation_s": float("nan"),
+    }]
     optimal_rows = [{"replication": 0, "checkpoint": 25, "Q": 1, "required_pricing_observations": 10, "setup_cost_s": 1.0, "marginal_pricing_cost_s": 1.0, "projected_total_cost_s": 2.0}]
     errors, warnings = validate_numeric_content(rows, gcv_rows, optimal_rows)
     assert warnings == []
@@ -314,6 +350,127 @@ def test_invalid_or_zero_residual_variance_handled_explicitly():
     out = compute_ncv_split_diagnostics(payoff, h, e_h=0.0)
     assert not math.isfinite(out["vrr_ncv_vs_mc"]) or out["vrr_ncv_vs_mc"] > 0
     assert compute_required_paths(out["residual_variance"], 0.001) == 2
+
+
+def test_validation_requires_component_status_when_components_are_not_separately_measured():
+    rows = [{
+        "replication": 0,
+        "checkpoint": 25,
+        "split": "validation",
+        "residual_variance": 1.0,
+        "path_and_payoff_runtime_s": "NA",
+        "control_evaluation_runtime_s": "NA",
+        "estimator_reduction_runtime_s": "NA",
+        "component_runtime_measurement_status": "not_separately_measured",
+        "end_to_end_pricing_runtime_s": 2.0,
+        "ncv_end_to_end_runtime_per_observation_s": 0.01,
+        "cumulative_training_runtime_s": 1.0,
+        "training_data_generation_runtime_s": 1.0,
+        "optimizer_cumulative_training_runtime_s": 1.0,
+        "optimizer_training_runtime_s": 1.0,
+        "validation_generation_and_evaluation_runtime_s": 1.0,
+        "ncv_setup_cost_s": 1.0,
+        "runtime_projection_is_sufficiently_linear": True,
+        "timing_path_counts": "100|500",
+    }]
+    gcv_rows = [{
+        "replication": 0,
+        "split": "validation",
+        "gcv_residual_variance": 1.0,
+        "path_and_payoff_runtime_s": "NA",
+        "control_evaluation_runtime_s": "NA",
+        "estimator_reduction_runtime_s": "NA",
+        "component_runtime_measurement_status": "not_separately_measured",
+        "end_to_end_pricing_runtime_s": 1.0,
+        "end_to_end_runtime_per_observation_s": 0.01,
+        "timing_path_counts": "100|500",
+    }]
+    optimal_rows = [{"replication": 0, "checkpoint": 25, "Q": 1, "required_pricing_observations": 10, "setup_cost_s": 1.0, "marginal_pricing_cost_s": 1.0, "projected_total_cost_s": 2.0}]
+    errors, warnings = validate_numeric_content(rows, gcv_rows, optimal_rows)
+    assert errors == []
+    assert warnings == []
+
+    rows_bad = [dict(rows[0])]
+    rows_bad[0]["path_and_payoff_runtime_s"] = 0.5
+    errors_bad, _ = validate_numeric_content(rows_bad, gcv_rows, optimal_rows)
+    assert any("not_separately_measured" in e for e in errors_bad)
+
+
+def test_runtime_projection_warnings_are_deduplicated_by_profile():
+    rows = []
+    for cp in (0, 2, 5, 10):
+        for split in ("validation", "test"):
+            rows.append(
+                {
+                    "replication": 0,
+                    "checkpoint": cp,
+                    "split": split,
+                    "residual_variance": 1.0,
+                    "path_and_payoff_runtime_s": "NA",
+                    "control_evaluation_runtime_s": "NA",
+                    "estimator_reduction_runtime_s": "NA",
+                    "component_runtime_measurement_status": "not_separately_measured",
+                    "end_to_end_pricing_runtime_s": 2.0,
+                    "ncv_end_to_end_runtime_per_observation_s": 0.01,
+                    "cumulative_training_runtime_s": 1.0,
+                    "training_data_generation_runtime_s": 1.0,
+                    "optimizer_cumulative_training_runtime_s": 1.0,
+                    "optimizer_training_runtime_s": 1.0,
+                    "validation_generation_and_evaluation_runtime_s": 1.0,
+                    "ncv_setup_cost_s": 1.0,
+                    "runtime_projection_is_sufficiently_linear": False,
+                    "runtime_projection_method": "piecewise_nearest_neighbor",
+                    "timing_path_counts": "100|500",
+                    "timing_repeats": 1,
+                    "runtime_projection_basis_n": "100|500",
+                }
+            )
+    gcv_rows = [{
+        "replication": 0,
+        "split": "validation",
+        "gcv_residual_variance": 1.0,
+        "path_and_payoff_runtime_s": "NA",
+        "control_evaluation_runtime_s": "NA",
+        "estimator_reduction_runtime_s": "NA",
+        "component_runtime_measurement_status": "not_separately_measured",
+        "end_to_end_pricing_runtime_s": 1.0,
+        "end_to_end_runtime_per_observation_s": 0.01,
+        "runtime_projection_is_sufficiently_linear": False,
+        "runtime_projection_method": "piecewise_nearest_neighbor",
+        "timing_path_counts": "100|500",
+        "timing_repeats": 1,
+        "runtime_projection_basis_n": "100|500",
+    }]
+    optimal_rows = [{"replication": 0, "checkpoint": 25, "Q": 1, "required_pricing_observations": 10, "setup_cost_s": 1.0, "marginal_pricing_cost_s": 1.0, "projected_total_cost_s": 2.0}]
+    errors, warnings = validate_numeric_content(rows, gcv_rows, optimal_rows)
+    assert errors == []
+    assert len(warnings) == 2
+    assert sum("method=NCV" in w for w in warnings) == 1
+    assert sum("method=GCV" in w for w in warnings) == 1
+
+
+def test_legacy_gcv_control_only_runtime_does_not_drive_projected_costs():
+    profiles_a = [
+        {"method": "GCV", "n_paths": 100, "end_to_end_pricing_runtime_s": 10.0, "gcv_pricing_runtime_s": 0.01},
+        {"method": "GCV", "n_paths": 500, "end_to_end_pricing_runtime_s": 50.0, "gcv_pricing_runtime_s": 9999.0},
+    ]
+    profiles_b = [
+        {"method": "GCV", "n_paths": 100, "end_to_end_pricing_runtime_s": 10.0, "gcv_pricing_runtime_s": 8888.0},
+        {"method": "GCV", "n_paths": 500, "end_to_end_pricing_runtime_s": 50.0, "gcv_pricing_runtime_s": 0.02},
+    ]
+    out_a = compute_total_cost(
+        training_runtime=2.0,
+        required_paths=1,
+        per_obs_runtime=project_runtime_at_n(profiles_a, "GCV", 1_000)["projected_per_observation_s"],
+        reuse_q=10,
+    )
+    out_b = compute_total_cost(
+        training_runtime=2.0,
+        required_paths=1,
+        per_obs_runtime=project_runtime_at_n(profiles_b, "GCV", 1_000)["projected_per_observation_s"],
+        reuse_q=10,
+    )
+    assert out_a == out_b
 
 
 def test_gcv_pilot_not_repeated_inside_marginal_timing(monkeypatch):

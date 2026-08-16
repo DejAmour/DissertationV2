@@ -169,7 +169,13 @@ def collect_environment_metadata() -> dict[str, object]:
     metadata: dict[str, object] = {
         "platform": platform.platform(),
         "python_version": sys.version.split()[0],
+        "python_executable": sys.executable,
     }
+    base_prefix = getattr(sys, "base_prefix", sys.prefix)
+    in_venv = bool(os.environ.get("VIRTUAL_ENV")) or (sys.prefix != base_prefix)
+    venv_path = os.environ.get("VIRTUAL_ENV") or (sys.prefix if in_venv else "")
+    metadata["virtual_environment_active"] = bool(in_venv)
+    metadata["virtual_environment_path"] = str(venv_path) if venv_path else "NA"
 
     for package_name in ("numpy", "scipy", "torch", "pytest"):
         try:
