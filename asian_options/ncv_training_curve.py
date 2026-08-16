@@ -15,6 +15,7 @@ import numpy as np
 from asian_options.analytical import geometric_asian_call_price
 from asian_options.config import ModelConfig, collect_environment_metadata, seed_everything
 from asian_options.contracts import make_contract_cfg
+from asian_options.estimators import antithetic_variates, geometric_control_variate, standard_monte_carlo
 from asian_options.neural_cv import _ShallowNet, analytical_network_expectation, build_network
 from asian_options.payoffs import arithmetic_asian_call_payoff, geometric_asian_call_payoff
 from asian_options.simulate_gbm import simulate_paths
@@ -26,6 +27,7 @@ SEED_OFFSETS = {
     "test": 3_000,
     "gcv_pilot": 4_000,
 }
+TRAINING_CURVE_SELECTED_NCV_EPOCH = 25
 
 
 @dataclass(frozen=True)
@@ -280,7 +282,14 @@ def compute_gcv_benchmark(validation_split: dict[str, np.ndarray], test_split: d
                 "gcv_standard_error_at_reporting_n": se,
                 "gcv_pilot_runtime_s": pilot_runtime,
                 "gcv_pricing_runtime_s": pricing_runtime,
+                "gcv_control_only_pricing_runtime_s": pricing_runtime,
+                "gcv_control_only_per_observation_runtime_s": pricing_runtime / max(1, x.size),
                 "gcv_per_observation_runtime_s": pricing_runtime / max(1, x.size),
+                "path_and_payoff_runtime_s": pricing_runtime,
+                "control_evaluation_runtime_s": 0.0,
+                "estimator_reduction_runtime_s": 0.0,
+                "end_to_end_pricing_runtime_s": pricing_runtime,
+                "end_to_end_runtime_per_observation_s": pricing_runtime / max(1, x.size),
                 "gcv_price_estimate": float(np.mean(corrected)),
                 "gcv_analytical_eg": float(eg),
             }
@@ -300,6 +309,150 @@ def measure_inference_runtime(network: _ShallowNet, z_inputs: np.ndarray, repeat
         "inference_runtime_mean_s": float(statistics.mean(times)),
         "inference_runtime_std_s": float(statistics.stdev(times)) if len(times) > 1 else 0.0,
         "inference_runtime_per_observation_median_s": float(statistics.median(times) / max(1, z_inputs.shape[0])),
+    }
+
+
+def _maybe_cuda_sync(torch_mod) -> None:
+    if torch_mod is None:
+        return
+    cuda = getattr(torch_mod, "cuda", None)
+    if cuda is None or not getattr(cuda, "is_available", lambda: False)():
+        return
+    cuda.synchronize()
+
+
+def _timed_mc_av_gcv(method: str, cfg: ModelConfig, n_pilot: int = 0, repeats: int = 1) -> dict[str, float]:
+    times_path_and_payoff: list[float] = []
+    times_control: list[float] = []
+    times_reduce: list[float] = []
+    times_end_to_end: list[float] = []
+    times_setup: list[float] = []
+
+    for _ in range(max(1, repeats)):
+        if method == "MC":
+            res = standard_monte_carlo(cfg)
+            times_end_to_end.append(float(res.end_to_end_runtime_seconds))
+            times_path_and_payoff.append(float(res.end_to_end_runtime_seconds))
+            times_control.append(0.0)
+            times_reduce.append(0.0)
+            times_setup.append(0.0)
+            continue
+        if method == "AV":
+            res = antithetic_variates(cfg)
+            times_end_to_end.append(float(res.end_to_end_runtime_seconds))
+            times_path_and_payoff.append(float(res.end_to_end_runtime_seconds))
+            times_control.append(0.0)
+            times_reduce.append(0.0)
+            times_setup.append(0.0)
+            continue
+        if method == "GCV":
+            res = geometric_control_variate(cfg, n_pilot=n_pilot)
+            end_to_end = float(res.pricing_runtime_seconds)
+            times_end_to_end.append(end_to_end)
+            times_path_and_payoff.append(end_to_end)
+            times_control.append(0.0)
+            times_reduce.append(0.0)
+            times_setup.append(float(res.training_runtime_seconds))
+            continue
+        raise ValueError(f"Unsupported method: {method}")
+
+    end_to_end = statistics.median(times_end_to_end) if times_end_to_end else float("nan")
+    path_payoff = statistics.median(times_path_and_payoff) if times_path_and_payoff else float("nan")
+    control_eval = statistics.median(times_control) if times_control else float("nan")
+    reduction = statistics.median(times_reduce) if times_reduce else float("nan")
+    setup = statistics.median(times_setup) if times_setup else float("nan")
+    return {
+        "path_and_payoff_runtime_s": float(path_payoff),
+        "control_evaluation_runtime_s": float(control_eval),
+        "estimator_reduction_runtime_s": float(reduction),
+        "end_to_end_pricing_runtime_s": float(end_to_end),
+        "setup_runtime_s": float(setup),
+    }
+
+
+def _timed_ncv_end_to_end(network: _ShallowNet, cfg: ModelConfig, torch_mod, repeats: int) -> dict[str, float]:
+    model = _torch_model_from_initial_network(torch_mod, network).eval()
+    e_h = analytical_network_expectation(network)
+    times_path_and_payoff: list[float] = []
+    times_control: list[float] = []
+    times_reduce: list[float] = []
+    times_end_to_end: list[float] = []
+
+    for _ in range(max(1, repeats)):
+        rng = np.random.default_rng(cfg.seed)
+        _maybe_cuda_sync(torch_mod)
+        t0 = time.perf_counter()
+        z = rng.standard_normal((cfg.n_paths, cfg.m))
+        paths = simulate_paths(cfg, shocks=z)
+        payoff = arithmetic_asian_call_payoff(paths, cfg)
+        t_path = time.perf_counter()
+        with torch_mod.no_grad():
+            z_t = torch_mod.as_tensor(z, dtype=torch_mod.float64)
+            h = model(z_t).detach().cpu().numpy()
+        t_control = time.perf_counter()
+        corrected = payoff - h + e_h
+        _price = float(np.mean(corrected) * cfg.discount_factor)
+        _maybe_cuda_sync(torch_mod)
+        t1 = time.perf_counter()
+        times_path_and_payoff.append(t_path - t0)
+        times_control.append(t_control - t_path)
+        times_reduce.append(t1 - t_control)
+        times_end_to_end.append(t1 - t0)
+
+    return {
+        "path_and_payoff_runtime_s": float(statistics.median(times_path_and_payoff)),
+        "control_evaluation_runtime_s": float(statistics.median(times_control)),
+        "estimator_reduction_runtime_s": float(statistics.median(times_reduce)),
+        "end_to_end_pricing_runtime_s": float(statistics.median(times_end_to_end)),
+        "torch_tensor_conversion_inside_pricing_timing": True,
+    }
+
+
+def measure_end_to_end_pricing_runtime_profile(
+    *,
+    network: _ShallowNet,
+    monitoring_dates: int,
+    pricing_seed: int,
+    n_paths: int,
+    runtime_repeats: int,
+    torch_mod,
+    n_pilot: int,
+) -> dict[str, Any]:
+    cfg = _make_reference_cfg(monitoring_dates=monitoring_dates, n_paths=n_paths, seed=pricing_seed)
+    out: dict[str, Any] = {}
+    for method in ("MC", "AV", "GCV"):
+        timed = _timed_mc_av_gcv(method, cfg, n_pilot=n_pilot, repeats=runtime_repeats)
+        out[method] = {
+            **timed,
+            "end_to_end_runtime_per_observation_s": (
+                timed["end_to_end_pricing_runtime_s"] / max(1, cfg.n_paths)
+            ),
+        }
+    ncv_timed = _timed_ncv_end_to_end(network, cfg, torch_mod, repeats=runtime_repeats)
+    out["NCV"] = {
+        **ncv_timed,
+        "end_to_end_runtime_per_observation_s": (
+            ncv_timed["end_to_end_pricing_runtime_s"] / max(1, cfg.n_paths)
+        ),
+    }
+    out["n_paths"] = int(n_paths)
+    return out
+
+
+def assess_runtime_scaling(profiles: list[dict[str, Any]], method: str) -> dict[str, Any]:
+    points = [(int(p["n_paths"]), float(p[method]["end_to_end_pricing_runtime_s"])) for p in profiles]
+    points = [pt for pt in points if pt[0] > 0 and math.isfinite(pt[1])]
+    points.sort(key=lambda x: x[0])
+    per_obs = [t / n for n, t in points]
+    linearity_ratio = (max(per_obs) / min(per_obs)) if per_obs and min(per_obs) > 0 else float("inf")
+    is_linear = bool(per_obs) and math.isfinite(linearity_ratio) and linearity_ratio <= 1.15
+    basis_n = [n for n, _ in points]
+    return {
+        "runtime_projection_basis_n": basis_n,
+        "runtime_projection_method": "linear_per_observation_rate" if is_linear else "piecewise_nearest_neighbor",
+        "runtime_projection_is_empirical_or_projected": "projected_from_empirical_multi_n",
+        "runtime_projection_linearity_ratio": float(linearity_ratio) if math.isfinite(linearity_ratio) else "NA",
+        "runtime_projection_is_sufficiently_linear": is_linear,
     }
 
 
@@ -369,8 +522,8 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         w.writerows(rows)
 
 
-def validate_output_schema(output_dir: Path) -> dict[str, Any]:
-    required = [
+def required_output_files() -> list[str]:
+    return [
         "training_curve_config.json",
         "training_curve_environment.json",
         "training_curve_seed_manifest.csv",
@@ -383,12 +536,70 @@ def validate_output_schema(output_dir: Path) -> dict[str, Any]:
         "TRAINING_CURVE_HANDOVER.md",
         "ncv_training_curve_summary.png",
     ]
+
+
+def validate_output_schema(output_dir: Path, *, include_report_in_presence_check: bool) -> dict[str, Any]:
+    required = required_output_files()
+    checked = required if include_report_in_presence_check else [x for x in required if x != "training_curve_validation_report.json"]
     exists = {name: (output_dir / name).exists() for name in required}
+    errors = [f"missing required output file: {name}" for name in checked if not exists.get(name, False)]
+    warnings: list[str] = []
+    report_present_post_write = bool((output_dir / "training_curve_validation_report.json").exists())
     return {
         "required_files": required,
         "exists": exists,
-        "all_present": all(exists.values()),
+        "all_present": all(exists.get(name, False) for name in required),
+        "errors": errors,
+        "warnings": warnings,
+        "report_present_post_write": report_present_post_write,
+        "passed": len(errors) == 0 and all(exists.get(name, False) for name in checked),
     }
+
+
+def validate_numeric_content(
+    per_replication_rows: list[dict[str, Any]],
+    gcv_rows: list[dict[str, Any]],
+    optimal_rows: list[dict[str, Any]],
+) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    required_non_negative = (
+        "path_and_payoff_runtime_s",
+        "control_evaluation_runtime_s",
+        "estimator_reduction_runtime_s",
+        "end_to_end_pricing_runtime_s",
+        "ncv_end_to_end_runtime_per_observation_s",
+        "cumulative_training_runtime_s",
+        "training_data_generation_runtime_s",
+        "optimizer_training_runtime_s",
+        "validation_generation_and_evaluation_runtime_s",
+    )
+    for row in per_replication_rows:
+        rid = f"rep={row.get('replication')},cp={row.get('checkpoint')},split={row.get('split')}"
+        rv = row.get("residual_variance")
+        if not isinstance(rv, (int, float)) or not math.isfinite(float(rv)):
+            errors.append(f"{rid}: non-finite residual_variance")
+        for name in required_non_negative:
+            val = row.get(name)
+            if not isinstance(val, (int, float)) or not math.isfinite(float(val)):
+                errors.append(f"{rid}: non-finite {name}")
+            elif float(val) < 0.0:
+                errors.append(f"{rid}: negative {name}")
+        if row.get("runtime_projection_is_sufficiently_linear") is False:
+            warnings.append(f"{rid}: runtime projection not sufficiently linear; piecewise projection used")
+    for row in gcv_rows:
+        rid = f"rep={row.get('replication')},split={row.get('split')}"
+        for name in ("gcv_residual_variance", "end_to_end_pricing_runtime_s", "end_to_end_runtime_per_observation_s"):
+            val = row.get(name)
+            if not isinstance(val, (int, float)) or not math.isfinite(float(val)):
+                errors.append(f"{rid}: non-finite {name}")
+    for row in optimal_rows:
+        rid = f"rep={row.get('replication')},cp={row.get('checkpoint')},Q={row.get('Q')}"
+        for name in ("required_pricing_observations", "setup_cost_s", "marginal_pricing_cost_s", "projected_total_cost_s"):
+            val = row.get(name)
+            if not isinstance(val, (int, float)) or not math.isfinite(float(val)):
+                errors.append(f"{rid}: non-finite {name}")
+    return errors, warnings
 
 
 def build_handover_text(config: TrainingCurveConfig, facts: dict[str, Any]) -> str:
@@ -438,6 +649,7 @@ def _plot_summary_figure(
     gcv_rows: list[dict[str, Any]],
     target_se: float,
     q_values: tuple[int, ...],
+    fixed_checkpoint: int,
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -492,6 +704,9 @@ def _plot_summary_figure(
     axes[1].set_yscale("log")
     axes[1].legend()
 
+    gcv_val = [r for r in gcv_rows if r["split"] == "validation"]
+    gcv_var = statistics.mean([float(r["gcv_residual_variance"]) for r in gcv_val if math.isfinite(float(r["gcv_residual_variance"]))]) if gcv_val else float("nan")
+    gcv_rate = statistics.mean([float(r.get("end_to_end_runtime_per_observation_s", float("nan"))) for r in gcv_val if math.isfinite(float(r.get("end_to_end_runtime_per_observation_s", float("nan"))))]) if gcv_val else float("nan")
     for q in q_values:
         ys = []
         for cp in checkpoints:
@@ -504,14 +719,19 @@ def _plot_summary_figure(
                     compute_total_cost(
                         float(r["cumulative_training_runtime_s"]),
                         n_req,
-                        float(r["inference_runtime_per_observation_median_s"]),
+                        float(r.get("ncv_end_to_end_runtime_per_observation_s", r["inference_runtime_per_observation_median_s"])),
                         q,
                     )
                 )
             ys.append(statistics.mean(vals) if vals else float("nan"))
         axes[2].plot(checkpoints, ys, label=f"Q={q}")
+        if math.isfinite(gcv_var) and math.isfinite(gcv_rate):
+            gcv_n = compute_required_paths(gcv_var, target_se)
+            gcv_cost = compute_total_cost(0.0, gcv_n, gcv_rate, q)
+            axes[2].axhline(gcv_cost, linestyle="--", linewidth=0.8, alpha=0.6)
+    axes[2].axvline(fixed_checkpoint, linestyle=":", color="black", linewidth=1.0, label=f"fixed={fixed_checkpoint}")
     axes[2].set_xlabel("Epoch")
-    axes[2].set_ylabel("Projected total cost")
+    axes[2].set_ylabel("Projected total cost (end-to-end)")
     axes[2].set_yscale("log")
     axes[2].legend()
 
@@ -558,14 +778,67 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
 
     for rep in range(config.replications):
         seeds = replication_seeds(config.base_seed, rep)
+        t_data = time.perf_counter()
         train_split = simulate_split_dataset(config.monitoring_dates, config.train_paths, seeds["train"])
         val_split = simulate_split_dataset(config.monitoring_dates, config.validation_paths, seeds["validation"])
         test_split = simulate_split_dataset(config.monitoring_dates, config.test_paths, seeds["test"])
         pilot_split = simulate_split_dataset(config.monitoring_dates, config.validation_paths, seeds["gcv_pilot"])
+        data_generation_runtime_s = time.perf_counter() - t_data
 
         gcv_bench = compute_gcv_benchmark(val_split, test_split, pilot_split, n_reporting=config.pricing_observations_for_reporting)
+        gcv_cfg_reporting = _make_reference_cfg(
+            monitoring_dates=config.monitoring_dates,
+            n_paths=config.pricing_observations_for_reporting,
+            seed=seeds["gcv_pilot"] + 991,
+        )
+        gcv_runtime_reporting = _timed_mc_av_gcv("GCV", gcv_cfg_reporting, n_pilot=config.validation_paths, repeats=config.runtime_repeats)
+        gcv_runtime_small = _timed_mc_av_gcv(
+            "GCV",
+            _make_reference_cfg(
+                monitoring_dates=config.monitoring_dates,
+                n_paths=max(64, config.pricing_observations_for_reporting // 25),
+                seed=seeds["gcv_pilot"] + 997,
+            ),
+            n_pilot=config.validation_paths,
+            repeats=config.runtime_repeats,
+        )
+        gcv_runtime_medium = _timed_mc_av_gcv(
+            "GCV",
+            _make_reference_cfg(
+                monitoring_dates=config.monitoring_dates,
+                n_paths=max(256, config.pricing_observations_for_reporting // 5),
+                seed=seeds["gcv_pilot"] + 1003,
+            ),
+            n_pilot=config.validation_paths,
+            repeats=config.runtime_repeats,
+        )
+        gcv_scaling = assess_runtime_scaling(
+            [
+                {"n_paths": max(64, config.pricing_observations_for_reporting // 25), "GCV": gcv_runtime_small},
+                {"n_paths": max(256, config.pricing_observations_for_reporting // 5), "GCV": gcv_runtime_medium},
+                {"n_paths": config.pricing_observations_for_reporting, "GCV": gcv_runtime_reporting},
+            ],
+            "GCV",
+        )
         for gr in gcv_bench:
-            gcv_rows.append({"replication": rep, **gr})
+            gcv_rows.append(
+                {
+                    "replication": rep,
+                    **gr,
+                    "path_and_payoff_runtime_s": gcv_runtime_reporting["path_and_payoff_runtime_s"],
+                    "control_evaluation_runtime_s": gcv_runtime_reporting["control_evaluation_runtime_s"],
+                    "estimator_reduction_runtime_s": gcv_runtime_reporting["estimator_reduction_runtime_s"],
+                    "end_to_end_pricing_runtime_s": gcv_runtime_reporting["end_to_end_pricing_runtime_s"],
+                    "end_to_end_runtime_per_observation_s": (
+                        gcv_runtime_reporting["end_to_end_pricing_runtime_s"] / max(1, config.pricing_observations_for_reporting)
+                    ),
+                    "gcv_pilot_runtime_s_end_to_end": gcv_runtime_reporting["setup_runtime_s"],
+                    "gcv_pilot_runtime_s": gcv_runtime_reporting["setup_runtime_s"],
+                    "runtime_projection_basis_n": "|".join(str(x) for x in gcv_scaling["runtime_projection_basis_n"]),
+                    "runtime_projection_method": gcv_scaling["runtime_projection_method"],
+                    "runtime_projection_is_empirical_or_projected": gcv_scaling["runtime_projection_is_empirical_or_projected"],
+                }
+            )
 
         cfg_train = train_split["cfg"]
         network = build_network(cfg_train, hidden_width=config.hidden_width)
@@ -587,9 +860,12 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
         checkpoints = list(config.checkpoints)
         cumulative_training_s = 0.0
         previous_checkpoint_s = 0.0
+        validation_eval_runtime_cumulative_s = 0.0
 
         def evaluate_checkpoint(epoch: int, cumulative_runtime_s: float) -> None:
             nonlocal eval_no_grad_used
+            nonlocal validation_eval_runtime_cumulative_s
+            t_eval = time.perf_counter()
             model.eval()
             with torch.no_grad():
                 eval_no_grad_used = eval_no_grad_used and (not torch.is_grad_enabled())
@@ -616,6 +892,41 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                 n_reporting=config.pricing_observations_for_reporting,
             )
             inference = measure_inference_runtime(net_snapshot, test_split["Z"], config.runtime_repeats)
+            n_reporting = config.pricing_observations_for_reporting
+            n_small = max(64, n_reporting // 25)
+            n_medium = max(256, n_reporting // 5)
+            runtime_profiles = [
+                measure_end_to_end_pricing_runtime_profile(
+                    network=net_snapshot,
+                    monitoring_dates=config.monitoring_dates,
+                    pricing_seed=seeds["test"] + epoch * 1_000 + 11,
+                    n_paths=n_small,
+                    runtime_repeats=config.runtime_repeats,
+                    torch_mod=torch,
+                    n_pilot=config.validation_paths,
+                ),
+                measure_end_to_end_pricing_runtime_profile(
+                    network=net_snapshot,
+                    monitoring_dates=config.monitoring_dates,
+                    pricing_seed=seeds["test"] + epoch * 1_000 + 17,
+                    n_paths=n_medium,
+                    runtime_repeats=config.runtime_repeats,
+                    torch_mod=torch,
+                    n_pilot=config.validation_paths,
+                ),
+                measure_end_to_end_pricing_runtime_profile(
+                    network=net_snapshot,
+                    monitoring_dates=config.monitoring_dates,
+                    pricing_seed=seeds["test"] + epoch * 1_000 + 23,
+                    n_paths=n_reporting,
+                    runtime_repeats=config.runtime_repeats,
+                    torch_mod=torch,
+                    n_pilot=config.validation_paths,
+                ),
+            ]
+            ncv_scaling = assess_runtime_scaling(runtime_profiles, "NCV")
+            gcv_scaling = assess_runtime_scaling(runtime_profiles, "GCV")
+            validation_eval_runtime_cumulative_s += time.perf_counter() - t_eval
 
             snapshots[epoch] = {
                 "epoch": epoch,
@@ -628,6 +939,10 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                 "test_diag": test_diag,
                 "inference": inference,
                 "e_h": e_h,
+                "runtime_profiles": runtime_profiles,
+                "ncv_scaling": ncv_scaling,
+                "gcv_scaling": gcv_scaling,
+                "validation_generation_and_evaluation_runtime_s": validation_eval_runtime_cumulative_s,
             }
 
         evaluate_checkpoint(0, 0.0)
@@ -664,6 +979,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
             previous_checkpoint_s = cumulative
 
             for split_name, diag in (("validation", snap["val_diag"]), ("test", snap["test_diag"])):
+                profile_reporting = snap["runtime_profiles"][-1]["NCV"]
                 row = {
                     "replication": rep,
                     "checkpoint": cp,
@@ -682,6 +998,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                     "incremental_training_runtime_s": 0.0 if cp == 0 else incremental,
                     "objective_name": "MSE",
                     "objective_mean_loss": snap["validation_loss"] if split_name == "validation" else snap["test_loss"],
+                    "checkpoint_selection_metric": "validation_residual_variance",
                     "centered_residual_variance": diag["residual_variance"],
                     "timed_repeats": snap["inference"]["timed_repeats"],
                     "inference_runtime_median_s": snap["inference"]["inference_runtime_median_s"],
@@ -690,6 +1007,26 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                     "inference_runtime_per_observation_median_s": snap["inference"]["inference_runtime_per_observation_median_s"],
                     "evaluation_no_grad": eval_no_grad_used,
                     "epoch_zero_training_runtime_zero": snapshots[0]["epoch"] == 0,
+                    "training_data_generation_runtime_s": data_generation_runtime_s,
+                    "optimizer_training_runtime_s": 0.0 if cp == 0 else incremental,
+                    "validation_generation_and_evaluation_runtime_s": snap["validation_generation_and_evaluation_runtime_s"],
+                    "path_and_payoff_runtime_s": profile_reporting["path_and_payoff_runtime_s"],
+                    "control_evaluation_runtime_s": profile_reporting["control_evaluation_runtime_s"],
+                    "estimator_reduction_runtime_s": profile_reporting["estimator_reduction_runtime_s"],
+                    "end_to_end_pricing_runtime_s": profile_reporting["end_to_end_pricing_runtime_s"],
+                    "ncv_end_to_end_runtime_per_observation_s": profile_reporting["end_to_end_runtime_per_observation_s"],
+                    "runtime_projection_basis_n": "|".join(str(x) for x in snap["ncv_scaling"]["runtime_projection_basis_n"]),
+                    "runtime_projection_method": snap["ncv_scaling"]["runtime_projection_method"],
+                    "runtime_projection_is_empirical_or_projected": snap["ncv_scaling"]["runtime_projection_is_empirical_or_projected"],
+                    "runtime_projection_linearity_ratio": snap["ncv_scaling"]["runtime_projection_linearity_ratio"],
+                    "runtime_projection_is_sufficiently_linear": snap["ncv_scaling"]["runtime_projection_is_sufficiently_linear"],
+                    "torch_tensor_conversion_inside_pricing_timing": profile_reporting["torch_tensor_conversion_inside_pricing_timing"],
+                    "runtime_basis_n_small": snap["runtime_profiles"][0]["n_paths"],
+                    "runtime_basis_n_medium": snap["runtime_profiles"][1]["n_paths"],
+                    "runtime_basis_n_reporting": snap["runtime_profiles"][2]["n_paths"],
+                    "runtime_basis_runtime_s_small": snap["runtime_profiles"][0]["NCV"]["end_to_end_pricing_runtime_s"],
+                    "runtime_basis_runtime_s_medium": snap["runtime_profiles"][1]["NCV"]["end_to_end_pricing_runtime_s"],
+                    "runtime_basis_runtime_s_reporting": snap["runtime_profiles"][2]["NCV"]["end_to_end_pricing_runtime_s"],
                     **diag,
                 }
                 per_replication_rows.append(row)
@@ -752,47 +1089,73 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
         test_rows = [r for r in per_replication_rows if r["replication"] == rep and r["split"] == "test"]
         gcv_validation = next(gr for gr in gcv_rows if gr["replication"] == rep and gr["split"] == "validation")
         gcv_test = next(gr for gr in gcv_rows if gr["replication"] == rep and gr["split"] == "test")
-        se_targets = [gcv_validation["gcv_standard_error_at_reporting_n"], 0.001]
-        for target_se in se_targets:
+        se_targets = [
+            ("gcv_matched_at_reporting_n", float(gcv_validation["gcv_standard_error_at_reporting_n"])),
+            ("fixed_se", 0.001),
+        ]
+        for target_definition, target_se in se_targets:
             for q in config.q_values:
                 per_checkpoint_costs = []
                 for r in validation_rows:
                     req_n = compute_required_paths(float(r["residual_variance"]), float(target_se))
-                    per_obs = float(r["inference_runtime_per_observation_median_s"])
-                    cost = compute_total_cost(float(r["cumulative_training_runtime_s"]), req_n, per_obs, int(q))
-                    per_checkpoint_costs.append((r, req_n, cost))
-                best = min(per_checkpoint_costs, key=lambda x: x[2])
-                best_row, best_n, best_cost = best
+                    per_obs = float(r["ncv_end_to_end_runtime_per_observation_s"])
+                    setup_cost = float(r["cumulative_training_runtime_s"])
+                    marginal_pricing = req_n * per_obs
+                    total_cost = setup_cost + int(q) * marginal_pricing
+                    per_checkpoint_costs.append((r, req_n, setup_cost, marginal_pricing, total_cost))
+                best = min(per_checkpoint_costs, key=lambda x: x[4])
+                best_row, best_n, best_setup, best_marginal, best_cost = best
                 matched_test_row = next(rr for rr in test_rows if int(rr["checkpoint"]) == int(best_row["checkpoint"]))
 
                 test_required_n = compute_required_paths(float(matched_test_row["residual_variance"]), float(target_se))
-                test_total_cost = compute_total_cost(
-                    float(matched_test_row["cumulative_training_runtime_s"]),
-                    test_required_n,
-                    float(matched_test_row["inference_runtime_per_observation_median_s"]),
-                    int(q),
-                )
+                test_per_obs = float(matched_test_row["ncv_end_to_end_runtime_per_observation_s"])
+                test_setup = float(matched_test_row["cumulative_training_runtime_s"])
+                test_marginal = test_required_n * test_per_obs
+                test_total_cost = test_setup + int(q) * test_marginal
 
                 gcv_req = compute_required_paths(float(gcv_validation["gcv_residual_variance"]), float(target_se))
-                gcv_cost = compute_total_cost(0.0, gcv_req, float(gcv_validation["gcv_per_observation_runtime_s"]), int(q))
+                gcv_per_obs = float(gcv_validation["end_to_end_runtime_per_observation_s"])
+                gcv_setup = float(gcv_validation["gcv_pilot_runtime_s"])
+                gcv_marginal = gcv_req * gcv_per_obs
+                gcv_cost = gcv_setup + int(q) * gcv_marginal
                 gcv_test_req = compute_required_paths(float(gcv_test["gcv_residual_variance"]), float(target_se))
-                gcv_test_cost = compute_total_cost(0.0, gcv_test_req, float(gcv_test["gcv_per_observation_runtime_s"]), int(q))
+                gcv_test_per_obs = float(gcv_test["end_to_end_runtime_per_observation_s"])
+                gcv_test_setup = float(gcv_test["gcv_pilot_runtime_s"])
+                gcv_test_marginal = gcv_test_req * gcv_test_per_obs
+                gcv_test_cost = gcv_test_setup + int(q) * gcv_test_marginal
                 optimal_rows.append(
                     {
                         "replication": rep,
                         "selection_split": "validation",
+                        "cost_scope": "end_to_end",
+                        "target_definition": target_definition,
                         "target_se": float(target_se),
                         "Q": int(q),
                         "checkpoint": int(best_row["checkpoint"]),
-                        "cumulative_training_runtime_s": float(best_row["cumulative_training_runtime_s"]),
+                        "ncv_epoch_source": "training_curve_validation_tuning",
+                        "fixed_ncv_epoch_for_stage8": TRAINING_CURVE_SELECTED_NCV_EPOCH,
+                        "setup_cost_s": best_setup,
+                        "setup_reuse_assumption": "NCV training counted once then reused Q times",
+                        "runtime_projection_basis_n": best_row["runtime_projection_basis_n"],
+                        "runtime_projection_method": best_row["runtime_projection_method"],
+                        "runtime_projection_is_empirical_or_projected": best_row["runtime_projection_is_empirical_or_projected"],
+                        "cumulative_training_runtime_s": best_setup,
                         "validation_residual_variance": float(best_row["residual_variance"]),
                         "test_residual_variance": float(matched_test_row["residual_variance"]),
                         "required_pricing_observations": int(best_n),
-                        "projected_marginal_pricing_cost": float(best_n * float(best_row["inference_runtime_per_observation_median_s"])),
+                        "marginal_pricing_cost_s": float(best_marginal),
+                        "projected_total_cost_s": float(best_cost),
                         "projected_total_cost_validation": float(best_cost),
                         "projected_total_cost_test": float(test_total_cost),
                         "required_pricing_observations_test": int(test_required_n),
+                        "marginal_pricing_cost_test_s": float(test_marginal),
+                        "gcv_setup_cost_s": gcv_setup,
+                        "gcv_setup_reuse_assumption": "GCV pilot counted once and reused across Q for same target",
+                        "gcv_required_pricing_observations": int(gcv_req),
+                        "gcv_marginal_pricing_cost_s": float(gcv_marginal),
                         "gcv_projected_total_cost_validation": float(gcv_cost),
+                        "gcv_required_pricing_observations_test": int(gcv_test_req),
+                        "gcv_marginal_pricing_cost_test_s": float(gcv_test_marginal),
                         "gcv_projected_total_cost_test": float(gcv_test_cost),
                         "optimal_ncv_beats_gcv_validation": bool(best_cost < gcv_cost),
                         "optimal_ncv_beats_gcv_test": bool(test_total_cost < gcv_test_cost),
@@ -836,17 +1199,30 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
         gcv_rows,
         target_se=float(config.se_targets[0]) if config.se_targets else 0.001,
         q_values=config.q_values,
+        fixed_checkpoint=TRAINING_CURVE_SELECTED_NCV_EPOCH if TRAINING_CURVE_SELECTED_NCV_EPOCH in config.checkpoints else int(config.checkpoints[0]),
     )
 
     (out_dir / "TRAINING_CURVE_HANDOVER.md").write_text(build_handover_text(config, facts), encoding="utf-8")
 
-    validation_report = validate_output_schema(out_dir)
+    provisional_report = validate_output_schema(out_dir, include_report_in_presence_check=False)
+    provisional_report["report_write_phase"] = "preliminary_without_self_check"
+    _write_json(out_dir / "training_curve_validation_report.json", provisional_report)
+
+    validation_report = validate_output_schema(out_dir, include_report_in_presence_check=True)
+    numeric_errors, numeric_warnings = validate_numeric_content(per_replication_rows, gcv_rows, optimal_rows)
+    validation_report["errors"].extend(numeric_errors)
+    validation_report["warnings"].extend(numeric_warnings)
+    validation_report["all_present"] = all(validation_report["exists"].values())
+    validation_report["passed"] = validation_report["all_present"] and len(validation_report["errors"]) == 0
     validation_report.update(
         {
+            "report_write_phase": "final_with_post_write_self_check",
             "checkpoint_grid": list(config.checkpoints),
             "checkpoint_grid_starts_at_zero": config.checkpoints[0] == 0,
             "checkpoint_grid_strictly_increasing": all(config.checkpoints[i] < config.checkpoints[i + 1] for i in range(len(config.checkpoints) - 1)),
             "dissertation_monitoring_dates_252": config.monitoring_dates == 252 if config.profile == "dissertation" else True,
+            "n_errors": len(validation_report["errors"]),
+            "n_warnings": len(validation_report["warnings"]),
         }
     )
     _write_json(out_dir / "training_curve_validation_report.json", validation_report)

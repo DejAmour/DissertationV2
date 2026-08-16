@@ -16,9 +16,12 @@ from asian_options.ncv_training_curve import (
     compute_gcv_benchmark,
     ncv_training_facts,
     profile_config,
+    required_output_files,
     replication_seeds,
     run_training_curve_experiment,
     simulate_split_dataset,
+    validate_numeric_content,
+    validate_output_schema,
     validate_checkpoints,
 )
 
@@ -85,6 +88,7 @@ def test_required_paths_ceiling_formula_and_floor_of_two():
     assert n == math.ceil(0.25 / (0.1**2))
     assert compute_required_paths(float("nan"), 0.1) == 2
     assert compute_required_paths(0.0, 0.1) == 2
+    assert compute_required_paths(0.011, 0.1) == 2
 
 
 def test_cost_formula_training_once_pricing_q_times():
@@ -133,7 +137,7 @@ def test_tiny_run_outputs_schema_and_checkpoint_properties(tmp_path, monkeypatch
         default_epochs=2,
         train_batch_size=8,
         runtime_repeats=2,
-        pricing_observations_for_reporting=50_000,
+        pricing_observations_for_reporting=200,
         q_values=(1, 10),
         se_targets=(0.001,),
         output_dir=str(tmp_path),
@@ -188,6 +192,58 @@ def test_tiny_run_outputs_schema_and_checkpoint_properties(tmp_path, monkeypatch
     assert report["checkpoint_grid_starts_at_zero"] is True
     assert report["checkpoint_grid_strictly_increasing"] is True
     assert report["all_present"] is True
+    assert report["passed"] is True
+    assert report["report_present_post_write"] is True
+    assert report["exists"]["training_curve_validation_report.json"] is True
+
+
+def test_validation_report_self_check_pre_and_post_write(tmp_path):
+    for name in required_output_files():
+        if name != "training_curve_validation_report.json":
+            (tmp_path / name).write_text("x", encoding="utf-8")
+    pre = validate_output_schema(tmp_path, include_report_in_presence_check=False)
+    assert pre["all_present"] is False
+    assert pre["exists"]["training_curve_validation_report.json"] is False
+    assert pre["passed"] is True
+    (tmp_path / "training_curve_validation_report.json").write_text("{}", encoding="utf-8")
+    post = validate_output_schema(tmp_path, include_report_in_presence_check=True)
+    assert post["all_present"] is True
+    assert post["passed"] is True
+
+
+def test_validation_report_missing_required_file_fails(tmp_path):
+    for name in required_output_files():
+        if name != "training_curve_summary.csv":
+            (tmp_path / name).write_text("x", encoding="utf-8")
+    report = validate_output_schema(tmp_path, include_report_in_presence_check=True)
+    assert report["all_present"] is False
+    assert report["passed"] is False
+    assert any("training_curve_summary.csv" in err for err in report["errors"])
+
+
+def test_numeric_validation_fails_for_non_finite_timing_or_variance():
+    rows = [{
+        "replication": 0,
+        "checkpoint": 25,
+        "split": "validation",
+        "residual_variance": float("nan"),
+        "path_and_payoff_runtime_s": 1.0,
+        "control_evaluation_runtime_s": 1.0,
+        "estimator_reduction_runtime_s": 0.0,
+        "end_to_end_pricing_runtime_s": 2.0,
+        "ncv_end_to_end_runtime_per_observation_s": 0.01,
+        "cumulative_training_runtime_s": 1.0,
+        "training_data_generation_runtime_s": 1.0,
+        "optimizer_training_runtime_s": 1.0,
+        "validation_generation_and_evaluation_runtime_s": 1.0,
+        "runtime_projection_is_sufficiently_linear": True,
+    }]
+    gcv_rows = [{"replication": 0, "split": "validation", "gcv_residual_variance": 1.0, "end_to_end_pricing_runtime_s": 1.0, "end_to_end_runtime_per_observation_s": float("nan")}]
+    optimal_rows = [{"replication": 0, "checkpoint": 25, "Q": 1, "required_pricing_observations": 10, "setup_cost_s": 1.0, "marginal_pricing_cost_s": 1.0, "projected_total_cost_s": 2.0}]
+    errors, warnings = validate_numeric_content(rows, gcv_rows, optimal_rows)
+    assert warnings == []
+    assert any("non-finite residual_variance" in e for e in errors)
+    assert any("non-finite end_to_end_runtime_per_observation_s" in e for e in errors)
 
 
 def test_invalid_or_zero_residual_variance_handled_explicitly():

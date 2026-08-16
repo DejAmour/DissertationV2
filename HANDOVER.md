@@ -63,3 +63,23 @@ with offsets: ref_train=1000, ref_val=2000, target_train=3000+ci*100,
 pilot=4000+ci*100, pricing=5000+ci*100, high_prec=9000.
 
 All realized seeds are saved in `seed_manifest.csv` in each output bundle.
+
+## Stage 8 + training-curve accounting update (current)
+
+- Stage 8 fixed NCV epoch is now 25 with
+  `ncv_epoch_source=training_curve_validation_tuning`.
+- Training objective remains MSE; checkpoint selection criterion is validation
+  residual variance from the separate training-curve tuning workflow.
+- The recorded tuning evidence is retained as interpretation context: roughly
+  26% held-out residual-variance improvement at 25 epochs versus 100 epochs,
+  while GCV remains materially more variance-efficient (about 5.8–5.9× better
+  residual variance than NCV).
+- End-to-end pricing runtime fields are recorded for cost projection
+  (path/payoff, control evaluation, estimator reduction, and full pricing
+  runtime), and projected total cost uses:
+  `setup_cost + Q * marginal_pricing_cost`.
+- Validation report generation now performs a post-write self-check so
+  `training_curve_validation_report.json` no longer fails because it checked for
+  itself before creation.
+- No architecture changes, no option-dependent rescaling estimator, and no
+  non-GBM extensions were added.
