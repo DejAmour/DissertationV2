@@ -259,8 +259,8 @@ def compute_gcv_benchmark(validation_split: dict[str, np.ndarray], test_split: d
     pilot_runtime = time.perf_counter() - t0
 
     out: list[dict[str, Any]] = []
-    eg = geometric_asian_call_price(validation_split["cfg"])
     for split_name, split in (("validation", validation_split), ("test", test_split)):
+        eg = geometric_asian_call_price(split["cfg"])
         t1 = time.perf_counter()
         x = split["payoff_arithmetic"]
         g = split["payoff_geometric"]
@@ -290,9 +290,9 @@ def compute_gcv_benchmark(validation_split: dict[str, np.ndarray], test_split: d
 
 def measure_inference_runtime(network: _ShallowNet, z_inputs: np.ndarray, repeats: int) -> dict[str, float]:
     times: list[float] = []
-    for _ in range(max(1, repeats)):
+    for _repeat in range(max(1, repeats)):
         t0 = time.perf_counter()
-        _ = network.forward(z_inputs)
+        _result = network.forward(z_inputs)
         times.append(time.perf_counter() - t0)
     return {
         "timed_repeats": int(max(1, repeats)),
@@ -431,7 +431,14 @@ def build_handover_text(config: TrainingCurveConfig, facts: dict[str, Any]) -> s
     )
 
 
-def _plot_summary_figure(output_dir: Path, checkpoints: list[int], per_rep_rows: list[dict[str, Any]], gcv_rows: list[dict[str, Any]], target_se: float) -> None:
+def _plot_summary_figure(
+    output_dir: Path,
+    checkpoints: list[int],
+    per_rep_rows: list[dict[str, Any]],
+    gcv_rows: list[dict[str, Any]],
+    target_se: float,
+    q_values: tuple[int, ...],
+) -> None:
     import matplotlib.pyplot as plt
 
     def _series(metric: str, split: str = "validation"):
@@ -485,7 +492,7 @@ def _plot_summary_figure(output_dir: Path, checkpoints: list[int], per_rep_rows:
     axes[1].set_yscale("log")
     axes[1].legend()
 
-    for q in (1, 10, 100, 1000):
+    for q in q_values:
         ys = []
         for cp in checkpoints:
             vals = []
@@ -646,6 +653,10 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
             if epoch in checkpoint_set:
                 evaluate_checkpoint(epoch, cumulative_training_s)
 
+        missing_checkpoints = [cp for cp in checkpoints if cp not in snapshots]
+        if missing_checkpoints:
+            raise RuntimeError(f"Missing checkpoint snapshots for epochs: {missing_checkpoints}")
+
         for cp in checkpoints:
             snap = snapshots[cp]
             cumulative = float(snap["cumulative_training_runtime_s"])
@@ -670,7 +681,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                     "cumulative_training_runtime_s": cumulative,
                     "incremental_training_runtime_s": 0.0 if cp == 0 else incremental,
                     "objective_name": "MSE",
-                    "objective_mean_loss": snap["train_loss"] if split_name == "validation" else snap["test_loss"],
+                    "objective_mean_loss": snap["validation_loss"] if split_name == "validation" else snap["test_loss"],
                     "centered_residual_variance": diag["residual_variance"],
                     "timed_repeats": snap["inference"]["timed_repeats"],
                     "inference_runtime_median_s": snap["inference"]["inference_runtime_median_s"],
@@ -818,7 +829,14 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
     _write_csv(out_dir / "training_curve_optimal_checkpoints.csv", optimal_rows)
     _write_csv(out_dir / "training_curve_gcv_benchmark.csv", gcv_rows)
 
-    _plot_summary_figure(out_dir, list(config.checkpoints), per_replication_rows, gcv_rows, target_se=0.001)
+    _plot_summary_figure(
+        out_dir,
+        list(config.checkpoints),
+        per_replication_rows,
+        gcv_rows,
+        target_se=float(config.se_targets[0]) if config.se_targets else 0.001,
+        q_values=config.q_values,
+    )
 
     (out_dir / "TRAINING_CURVE_HANDOVER.md").write_text(build_handover_text(config, facts), encoding="utf-8")
 
