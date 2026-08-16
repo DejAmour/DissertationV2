@@ -96,7 +96,9 @@ Each run writes a timestamped folder `run_YYYYMMDDTHHMMSSffffffZ` under `--outpu
   estimator averaging.
 - Keep component timings as diagnostics (`path_and_payoff_runtime_s`,
   `control_evaluation_runtime_s`, `estimator_reduction_runtime_s`) but do not
-  replace end-to-end timing with a sum of duplicated components.
+  replace end-to-end timing with a sum of duplicated components. If components
+  are not separately measured, record them as `NA` with
+  `component_runtime_measurement_status=not_separately_measured`.
 - One-time costs are amortised once (`setup_cost_s`), pricing is multiplied by
   `Q` (`projected_total_cost_s = setup_cost_s + Q * marginal_pricing_cost_s`).
 - For NCV training-curve checkpoints, operational setup is
@@ -104,3 +106,20 @@ Each run writes a timestamped folder `run_YYYYMMDDTHHMMSSffffffZ` under `--outpu
   for checkpoint > 0 and `0` for checkpoint = 0.
 - Validation generation/evaluation runtime is tracked separately as
   research/tuning overhead and excluded from operational setup cost.
+- Stage 8 fixed checkpoint policy is 25 epochs with
+  `ncv_epoch_source=training_curve_validation_tuning`; this is separate from
+  the generic `neural_cv.train_network` default (200 epochs), and the generic
+  training function does not perform online early stopping.
+- Legacy `gcv_pricing_runtime_s` and `gcv_per_observation_runtime_s` remain
+  diagnostic control-only fields; primary costing uses explicit end-to-end
+  runtime fields.
+
+## Dissertation environment reproducibility reminder
+
+Run dissertation-profile experiments from the project virtual environment and
+record the interpreter path:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -c "import sys; print(sys.executable)"
+```

@@ -151,6 +151,11 @@ the auxiliary training-curve validation tuning study
 MSE/Adam with the same architecture and option specification; only the fixed
 checkpoint policy changed. Final evaluation seeds are deterministically
 separated from training-curve train/validation/test streams.
+The generic `neural_cv.train_network` default remains 200 epochs; Stage 8
+explicitly overrides that generic default with the fixed 25-epoch policy.
+`neural_cv.train_network` does not perform online validation early stopping.
+The 25-epoch choice comes from the separate validation-based training-curve
+study, and final Stage 8 test/pricing runs do not select epoch online.
 The tuning study documented that 25 epochs improved held-out NCV residual
 variance by roughly 26% versus 100 epochs (about 27.6% with validation-selected
 stopping), while GCV remained substantially stronger (about 5.8–5.9× lower
@@ -174,11 +179,25 @@ RNG + path simulation + payoff + control evaluation + estimator averaging),
 with one-time setup costs (NCV training, GCV pilot where reusable) counted once
 and marginal pricing costs multiplied by `Q`. Runtime projection metadata
 records basis sizes and whether values are empirical or projected.
+Diagnostic component runtime fields are only populated when separately measured;
+otherwise they are recorded as `NA` with
+`component_runtime_measurement_status=not_separately_measured`.
+Legacy `gcv_pricing_runtime_s` / `gcv_per_observation_runtime_s` fields remain
+diagnostic control-only labels with
+`gcv_pricing_runtime_scope=legacy_control_only_diagnostic_not_used_for_costing`.
 For NCV training-curve outputs, `ncv_setup_cost_s` is defined as
 `training_data_generation_runtime_s + optimizer_cumulative_training_runtime_s`
 for checkpoints above zero, and `0` at checkpoint zero; validation
 generation/evaluation runtime is explicitly labeled as research/tuning overhead
 excluded from operational setup cost.
+
+Before final dissertation runs, activate the environment and record the Python
+interpreter:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -c "import sys; print(sys.executable)"
+```
 
 ### NCV output-rescaling note
 

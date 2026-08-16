@@ -1340,94 +1340,134 @@ def _solve_break_even(
     proposed_setup_cost: Optional[float] = None,
 ) -> dict:
     tol = 1e-9
-    baseline_setup = 0.0 if baseline_setup_cost is None else baseline_setup_cost
-    proposed_setup = initial_cost if proposed_setup_cost is None else proposed_setup_cost
+    baseline_setup = baseline_setup_cost if baseline_setup_cost is not None else 0.0
+    proposed_setup = proposed_setup_cost if proposed_setup_cost is not None else initial_cost
 
-    if proposed_setup is None or baseline_marginal is None or proposed_marginal is None:
+    def _result(
+        *,
+        break_even_q: int | str,
+        failure_reason: str,
+        verified_q_minus_1: bool,
+        verified_q: bool,
+        q_minus_1_verification_status: str,
+        cost_baseline_q_minus_1: float | str = "NA",
+        cost_proposed_q_minus_1: float | str = "NA",
+        cost_baseline_q: float | str = "NA",
+        cost_proposed_q: float | str = "NA",
+    ) -> dict:
         return {
-            "break_even_q": "NA",
-            "failure_reason": "missing_runtime_input",
-            "verified_q_minus_1": False,
-            "verified_q": False,
-            "baseline_setup_cost_s": baseline_setup,
-            "proposed_setup_cost_s": proposed_setup,
-            "q_minus_1_verification_status": "missing_runtime_input",
+            "baseline_setup_cost_s": baseline_setup if baseline_setup is not None else "NA",
+            "proposed_setup_cost_s": proposed_setup if proposed_setup is not None else "NA",
+            "baseline_marginal_cost_s": baseline_marginal if baseline_marginal is not None else "NA",
+            "proposed_marginal_cost_s": proposed_marginal if proposed_marginal is not None else "NA",
+            "break_even_q": break_even_q,
+            "verified_q": verified_q,
+            "verified_q_minus_1": verified_q_minus_1,
+            "q_minus_1_verification_status": q_minus_1_verification_status,
+            "cost_baseline_q_minus_1": cost_baseline_q_minus_1,
+            "cost_proposed_q_minus_1": cost_proposed_q_minus_1,
+            "cost_baseline_q": cost_baseline_q,
+            "cost_proposed_q": cost_proposed_q,
+            "failure_reason": failure_reason,
         }
 
-    if proposed_setup < 0 or baseline_setup < 0:
-        return {
-            "break_even_q": "NA",
-            "failure_reason": "negative_initial_cost",
-            "verified_q_minus_1": False,
-            "verified_q": False,
-            "baseline_setup_cost_s": baseline_setup,
-            "proposed_setup_cost_s": proposed_setup,
-            "q_minus_1_verification_status": "not_verified",
-        }
+    vals = [baseline_setup, proposed_setup, baseline_marginal, proposed_marginal]
+    if any(v is None for v in vals) or any(not math.isfinite(float(v)) for v in vals if v is not None):
+        return _result(
+            break_even_q="NA",
+            failure_reason="missing_or_non_finite_runtime_input",
+            verified_q_minus_1=False,
+            verified_q=False,
+            q_minus_1_verification_status="missing_runtime_input",
+        )
 
-    denom = baseline_marginal - proposed_marginal
-    if abs(denom) <= tol:
-        return {
-            "break_even_q": "NA",
-            "failure_reason": "positive_initial_cost_and_equal_marginal_cost" if (proposed_setup - baseline_setup) > tol else "equal_marginal_cost",
-            "verified_q_minus_1": False,
-            "verified_q": False,
-            "baseline_setup_cost_s": baseline_setup,
-            "proposed_setup_cost_s": proposed_setup,
-            "q_minus_1_verification_status": "not_verified",
-        }
-    if denom < 0:
-        return {
-            "break_even_q": "NA",
-            "failure_reason": "positive_initial_cost_and_higher_marginal_cost",
-            "verified_q_minus_1": False,
-            "verified_q": False,
-            "baseline_setup_cost_s": baseline_setup,
-            "proposed_setup_cost_s": proposed_setup,
-            "q_minus_1_verification_status": "not_verified",
-        }
+    baseline_setup = float(baseline_setup)
+    proposed_setup = float(proposed_setup)
+    baseline_marginal = float(baseline_marginal)
+    proposed_marginal = float(proposed_marginal)
 
-    q = max(1, int(math.ceil((proposed_setup - baseline_setup) / denom)))
+    if baseline_setup < 0 or proposed_setup < 0:
+        return _result(
+            break_even_q="NA",
+            failure_reason="negative_setup_cost",
+            verified_q_minus_1=False,
+            verified_q=False,
+            q_minus_1_verification_status="not_verified",
+        )
 
-    def c_base(Q: int) -> float:
-        return baseline_setup + Q * baseline_marginal
+    def c_base(q: int) -> float:
+        return baseline_setup + q * baseline_marginal
 
-    def c_prop(Q: int) -> float:
-        return proposed_setup + Q * proposed_marginal
+    def c_prop(q: int) -> float:
+        return proposed_setup + q * proposed_marginal
 
+    if abs(baseline_marginal - proposed_marginal) <= tol:
+        if proposed_setup <= baseline_setup + tol:
+            q = 1
+            return _result(
+                break_even_q=q,
+                failure_reason="",
+                verified_q_minus_1=True,
+                verified_q=c_prop(q) <= c_base(q) + tol,
+                q_minus_1_verification_status="not_applicable_minimum_q_boundary",
+                cost_baseline_q=c_base(q),
+                cost_proposed_q=c_prop(q),
+            )
+        return _result(
+            break_even_q="NA",
+            failure_reason="equal_marginal_proposed_setup_above_baseline",
+            verified_q_minus_1=False,
+            verified_q=False,
+            q_minus_1_verification_status="not_verified",
+        )
+
+    if proposed_marginal > baseline_marginal + tol:
+        return _result(
+            break_even_q="NA",
+            failure_reason="proposed_marginal_above_baseline_no_long_run_break_even",
+            verified_q_minus_1=False,
+            verified_q=False,
+            q_minus_1_verification_status="not_verified",
+        )
+
+    raw_q = (proposed_setup - baseline_setup) / (baseline_marginal - proposed_marginal)
+    scale_tol = 1e-12 * max(1.0, abs(raw_q))
+    q = max(1, int(math.ceil(raw_q - scale_tol)))
+
+    verified_q = c_prop(q) <= c_base(q) + tol
     if q == 1:
-        verify_prev = True
+        verified_q_minus_1 = True
         q_minus_1_status = "not_applicable_minimum_q_boundary"
         q_minus_1 = None
     else:
         q_minus_1 = q - 1
-        verify_prev = c_prop(q_minus_1) > (c_base(q_minus_1) + tol)
-        q_minus_1_status = "verified_against_q_minus_1" if verify_prev else "failed_at_q_minus_1"
-    verify_now = c_prop(q) <= (c_base(q) + tol)
-    if not (verify_prev and verify_now):
-        return {
-            "break_even_q": "NA",
-            "failure_reason": "verification_failed_at_q_minus_1_or_q",
-            "verified_q_minus_1": verify_prev,
-            "verified_q": verify_now,
-            "baseline_setup_cost_s": baseline_setup,
-            "proposed_setup_cost_s": proposed_setup,
-            "q_minus_1_verification_status": q_minus_1_status,
-        }
+        verified_q_minus_1 = c_prop(q_minus_1) > c_base(q_minus_1) + tol
+        q_minus_1_status = "verified_against_q_minus_1" if verified_q_minus_1 else "failed_at_q_minus_1"
 
-    return {
-        "break_even_q": q,
-        "failure_reason": "",
-        "verified_q_minus_1": verify_prev,
-        "verified_q": verify_now,
-        "baseline_setup_cost_s": baseline_setup,
-        "proposed_setup_cost_s": proposed_setup,
-        "q_minus_1_verification_status": q_minus_1_status,
-        "cost_baseline_q_minus_1": c_base(q_minus_1) if q_minus_1 is not None else "NA",
-        "cost_proposed_q_minus_1": c_prop(q_minus_1) if q_minus_1 is not None else "NA",
-        "cost_baseline_q": c_base(q),
-        "cost_proposed_q": c_prop(q),
-    }
+    if not (verified_q and verified_q_minus_1):
+        return _result(
+            break_even_q="NA",
+            failure_reason="verification_failed_at_q_minus_1_or_q",
+            verified_q_minus_1=verified_q_minus_1,
+            verified_q=verified_q,
+            q_minus_1_verification_status=q_minus_1_status,
+            cost_baseline_q_minus_1=c_base(q_minus_1) if q_minus_1 is not None else "NA",
+            cost_proposed_q_minus_1=c_prop(q_minus_1) if q_minus_1 is not None else "NA",
+            cost_baseline_q=c_base(q),
+            cost_proposed_q=c_prop(q),
+        )
+
+    return _result(
+        break_even_q=q,
+        failure_reason="",
+        verified_q_minus_1=verified_q_minus_1,
+        verified_q=verified_q,
+        q_minus_1_verification_status=q_minus_1_status,
+        cost_baseline_q_minus_1=c_base(q_minus_1) if q_minus_1 is not None else "NA",
+        cost_proposed_q_minus_1=c_prop(q_minus_1) if q_minus_1 is not None else "NA",
+        cost_baseline_q=c_base(q),
+        cost_proposed_q=c_prop(q),
+    )
 
 
 def compute_break_even_tables(
@@ -1443,8 +1483,8 @@ def compute_break_even_tables(
     for cid in TARGET_IDS:
         gcv = _safe_float(agg.get((cid, "GCV"), {}).get("marginal_runtime_s_median"))
         gcv_mean = _safe_float(agg.get((cid, "GCV"), {}).get("marginal_runtime_s_mean"))
-        gcv_setup = _safe_float(agg.get((cid, "GCV"), {}).get("pilot_runtime_s_median")) or 0.0
-        gcv_setup_mean = _safe_float(agg.get((cid, "GCV"), {}).get("pilot_runtime_s_mean")) or 0.0
+        gcv_setup = _safe_float(agg.get((cid, "GCV"), {}).get("pilot_runtime_s_median"))
+        gcv_setup_mean = _safe_float(agg.get((cid, "GCV"), {}).get("pilot_runtime_s_mean"))
         scratch_marg = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("marginal_runtime_s_median"))
         scratch_marg_mean = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("marginal_runtime_s_mean"))
         scratch_init = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("ncv_setup_cost_s_median"))
@@ -1529,7 +1569,7 @@ def compute_break_even_tables(
                 continue
             baseline = _safe_float(gcv_row.get("marginal_runtime_s"))
             proposed = _safe_float(r.get("marginal_runtime_s"))
-            baseline_setup = _safe_float(gcv_row.get("one_time_runtime_s")) or 0.0
+            baseline_setup = _safe_float(gcv_row.get("one_time_runtime_s"))
             init_c = _safe_float(r.get("one_time_runtime_s"))
             baseline_mean = _safe_float(gcv_row.get("projected_pricing_runtime_s_mean_sensitivity"))
             proposed_mean = _safe_float(r.get("projected_pricing_runtime_s_mean_sensitivity"))
@@ -1874,6 +1914,14 @@ def run_stage8(
     env_meta["torch_version"] = _torch_version()
     env_meta["cpu_count"] = os.cpu_count()
     env_meta["platform"] = platform.platform()
+    env_warnings: List[str] = []
+    if profile == "dissertation" and not bool(env_meta.get("virtual_environment_active", False)):
+        env_warnings.append("dissertation_profile_running_outside_virtual_environment")
+        print(
+            "[Stage 8][warning] Dissertation profile is running outside a virtual environment.",
+            flush=True,
+        )
+    env_meta["warnings"] = env_warnings
     _write_json(run_dir / "environment.json", env_meta)
 
     seed_manifest = _build_seed_manifest(base_seed, n_replications)
@@ -2052,6 +2100,8 @@ def run_stage8(
 - replications: {n_replications}
 - monitoring dates: {monitoring_dates}
 - fixed NCV epoch: {STAGE8_FIXED_NCV_EPOCH} ({STAGE8_NCV_EPOCH_SOURCE})
+- neural_cv.train_network default epoch count: 200 (generic function default; Stage 8 overrides to fixed {STAGE8_FIXED_NCV_EPOCH})
+- Stage 8 uses fixed checkpoint from validation-based training-curve study; final test/pricing does not select epoch online
 - Torch: {torch_line}
 - failed-row count: {n_failed}
 - successful-row count: {n_success}

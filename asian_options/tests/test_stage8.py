@@ -319,12 +319,92 @@ def test_break_even_q_equals_one_uses_minimum_boundary_verification():
     assert out["q_minus_1_verification_status"] == "not_applicable_minimum_q_boundary"
     assert out["cost_baseline_q_minus_1"] == "NA"
     assert out["cost_proposed_q_minus_1"] == "NA"
+    assert out["cost_proposed_q"] == 7.0
+    assert out["cost_baseline_q"] == 10.0
 
 
 def test_no_finite_break_even_has_reason():
     out = s8._solve_break_even(initial_cost=100.0, baseline_marginal=5.0, proposed_marginal=5.0)
     assert out["break_even_q"] == "NA"
     assert out["failure_reason"]
+
+
+def test_break_even_handles_float_ratio_just_above_integer():
+    out = s8._solve_break_even(
+        initial_cost=40.00000000000004,
+        baseline_marginal=10.0,
+        proposed_marginal=5.0,
+    )
+    assert out["break_even_q"] == 8
+    assert out["verified_q"] is True
+    assert out["verified_q_minus_1"] is True
+
+
+def test_break_even_equal_marginal_cases():
+    out_ok = s8._solve_break_even(
+        initial_cost=5.0,
+        baseline_setup_cost=6.0,
+        proposed_setup_cost=5.0,
+        baseline_marginal=10.0,
+        proposed_marginal=10.0,
+    )
+    assert out_ok["break_even_q"] == 1
+    assert out_ok["verified_q"] is True
+    assert out_ok["verified_q_minus_1"] is True
+    assert out_ok["q_minus_1_verification_status"] == "not_applicable_minimum_q_boundary"
+
+    out_na = s8._solve_break_even(
+        initial_cost=7.0,
+        baseline_setup_cost=6.0,
+        proposed_setup_cost=7.0,
+        baseline_marginal=10.0,
+        proposed_marginal=10.0,
+    )
+    assert out_na["break_even_q"] == "NA"
+    assert out_na["failure_reason"] == "equal_marginal_proposed_setup_above_baseline"
+
+
+def test_break_even_proposed_marginal_above_baseline_is_no_finite_break_even():
+    out = s8._solve_break_even(
+        initial_cost=1.0,
+        baseline_setup_cost=0.0,
+        proposed_setup_cost=1.0,
+        baseline_marginal=5.0,
+        proposed_marginal=6.0,
+    )
+    assert out["break_even_q"] == "NA"
+    assert out["failure_reason"] == "proposed_marginal_above_baseline_no_long_run_break_even"
+
+
+def test_break_even_proposed_setup_below_baseline_returns_q_one():
+    out = s8._solve_break_even(
+        initial_cost=1.0,
+        baseline_setup_cost=4.0,
+        proposed_setup_cost=1.0,
+        baseline_marginal=10.0,
+        proposed_marginal=9.0,
+    )
+    assert out["break_even_q"] == 1
+    assert out["verified_q"] is True
+    assert out["verified_q_minus_1"] is True
+
+
+def test_break_even_missing_or_non_finite_inputs_are_rejected():
+    out_missing = s8._solve_break_even(
+        initial_cost=None,
+        baseline_marginal=10.0,
+        proposed_marginal=5.0,
+    )
+    assert out_missing["break_even_q"] == "NA"
+    assert out_missing["failure_reason"] == "missing_or_non_finite_runtime_input"
+
+    out_non_finite = s8._solve_break_even(
+        initial_cost=2.0,
+        baseline_marginal=float("nan"),
+        proposed_marginal=5.0,
+    )
+    assert out_non_finite["break_even_q"] == "NA"
+    assert out_non_finite["failure_reason"] == "missing_or_non_finite_runtime_input"
 
 
 def test_runtime_summary_contains_required_statistics():
@@ -376,6 +456,7 @@ def test_break_even_changes_when_ncv_setup_cost_changes():
                     "contract_id": cid,
                     "method": "GCV",
                     "marginal_runtime_s_median": 10.0,
+                    "pilot_runtime_s_median": 0.0,
                     "pricing_observations_mean": 100,
                     "pricing_runtime_s_median": 10.0,
                 },
@@ -396,6 +477,7 @@ def test_break_even_changes_when_ncv_setup_cost_changes():
                     "contract_id": cid,
                     "method": "GCV",
                     "marginal_runtime_s_median": 10.0,
+                    "pilot_runtime_s_median": 0.0,
                     "pricing_observations_mean": 100,
                     "pricing_runtime_s_median": 10.0,
                 },
@@ -421,6 +503,8 @@ def test_break_even_changes_when_ncv_setup_cost_changes():
     assert row_low["q_minus_1_verification_status"] == "not_applicable_minimum_q_boundary"
     assert row_low["baseline_setup_cost_s"] == 0.0
     assert row_low["proposed_setup_cost_s"] == 2.0
+    assert row_low["cost_proposed_q"] == 7.0
+    assert row_low["cost_baseline_q"] == 10.0
     assert row_high["break_even_q"] == 4
     assert row_high["verified_q"] is True
     assert row_high["verified_q_minus_1"] is True
@@ -430,6 +514,35 @@ def test_break_even_changes_when_ncv_setup_cost_changes():
     assert row_high["cost_baseline_q_minus_1"] == 30.0
     assert row_high["cost_proposed_q"] == 40.0
     assert row_high["cost_baseline_q"] == 40.0
+    assert row_high["failure_reason"] == ""
+
+
+def test_break_even_uses_non_zero_gcv_setup_cost():
+    aggregate = [
+        {
+            "contract_id": TARGET_IDS[0],
+            "method": "GCV",
+            "marginal_runtime_s_median": 10.0,
+            "pilot_runtime_s_median": 3.0,
+        },
+        {
+            "contract_id": TARGET_IDS[0],
+            "method": "NCV_SCRATCH",
+            "marginal_runtime_s_median": 5.0,
+            "ncv_setup_cost_s_median": 20.0,
+        },
+    ]
+    for cid in TARGET_IDS[1:]:
+        aggregate.extend(
+            [
+                {"contract_id": cid, "method": "GCV", "marginal_runtime_s_median": 10.0, "pilot_runtime_s_median": 3.0},
+                {"contract_id": cid, "method": "NCV_SCRATCH", "marginal_runtime_s_median": 5.0, "ncv_setup_cost_s_median": 20.0},
+            ]
+        )
+    rows, _, _, _ = s8.compute_break_even_tables(aggregate, [], [])
+    row = next(r for r in rows if r["contract_id"] == TARGET_IDS[0] and r["method"] == "NCV_SCRATCH")
+    assert row["baseline_setup_cost_s"] == 3.0
+    assert row["break_even_q"] == 4
 
 
 def test_handover_torch_matches_environment_snapshot(tmp_path):
