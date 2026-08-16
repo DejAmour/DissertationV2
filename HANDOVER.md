@@ -78,11 +78,21 @@ All realized seeds are saved in `seed_manifest.csv` in each output bundle.
   (path/payoff, control evaluation, estimator reduction, and full pricing
   runtime), and projected total cost uses:
   `setup_cost + Q * marginal_pricing_cost`.
+- `training_curve_runtime_benchmarks.csv` now records raw bounded empirical
+  timing rows (replication × method × timing size × repeat) and is the direct
+  source for timing-repeat aggregation, linearity ratios, projection-method
+  selection, and projected marginal pricing costs.
 - NCV setup accounting is explicit: `ncv_setup_cost_s` is zero at checkpoint 0;
   otherwise it is `training_data_generation_runtime_s +
   optimizer_cumulative_training_runtime_s`. Validation
   generation/evaluation runtime is labeled as research/tuning overhead excluded
   from operational setup cost.
+- Training-curve summary confidence intervals are now two-sided Student-t
+  intervals with explicit CI metadata (`ci_method`, dof, critical value); `n=1`
+  rows are marked undefined instead of reporting a synthetic interval.
+- Training-curve config now includes explicit `default_epochs_scope` so
+  `default_epochs=100` cannot be interpreted as the Stage 8 fixed policy
+  (`STAGE8_FIXED_NCV_EPOCH=25` from validation tuning).
 - Validation report generation now performs a post-write self-check so
   `training_curve_validation_report.json` no longer fails because it checked for
   itself before creation.

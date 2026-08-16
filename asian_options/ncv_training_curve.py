@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from scipy.stats import t as _t_dist
 
 from asian_options.analytical import geometric_asian_call_price
 from asian_options.config import ModelConfig, collect_environment_metadata, seed_everything
@@ -43,6 +44,7 @@ class TrainingCurveConfig:
     hidden_width: int
     learning_rate: float
     default_epochs: int
+    default_epochs_scope: str
     train_batch_size: int
     runtime_repeats: int
     pilot_paths: int
@@ -94,6 +96,7 @@ def profile_config(profile: str, output_dir: str, base_seed: int = 42) -> Traini
             hidden_width=32,
             learning_rate=1e-2,
             default_epochs=100,
+            default_epochs_scope="training_curve_default_checkpoint_horizon_not_stage8_policy",
             train_batch_size=256,
             runtime_repeats=3,
             pilot_paths=50,
@@ -117,6 +120,7 @@ def profile_config(profile: str, output_dir: str, base_seed: int = 42) -> Traini
             hidden_width=32,
             learning_rate=1e-2,
             default_epochs=100,
+            default_epochs_scope="training_curve_default_checkpoint_horizon_not_stage8_policy",
             train_batch_size=256,
             runtime_repeats=5,
             pilot_paths=1_000,
@@ -430,6 +434,7 @@ def _timed_mc_av_gcv(
         "estimator_reduction_runtime_s": float(reduction),
         "end_to_end_pricing_runtime_s": float(end_to_end),
         "setup_runtime_s": float(setup),
+        "repeat_end_to_end_runtime_s": [float(x) for x in times_end_to_end],
     }
 
 
@@ -462,16 +467,26 @@ def build_runtime_profiles(
                 repeats=timing_repeats,
                 gcv_pilot_fit=gcv_pilot_fit if method == "GCV" else None,
             )
-            profiles.append(
-                {
-                    "method": method,
-                    "n_paths": int(n_paths),
-                    "timing_repeats": int(max(1, timing_repeats)),
-                    "timing_path_counts": "|".join(str(x) for x in timing_path_counts),
-                    **timed,
-                    "end_to_end_runtime_per_observation_s": timed["end_to_end_pricing_runtime_s"] / max(1, int(n_paths)),
-                }
-            )
+            repeated = [float(x) for x in timed.pop("repeat_end_to_end_runtime_s", [])]
+            if not repeated:
+                repeated = [float(timed["end_to_end_pricing_runtime_s"])]
+            for repeat_index, runtime_s in enumerate(repeated, start=1):
+                profiles.append(
+                    {
+                        "method": method,
+                        "n_paths": int(n_paths),
+                        "timing_repeats": int(max(1, timing_repeats)),
+                        "timing_path_counts": "|".join(str(x) for x in timing_path_counts),
+                        "repeat_index": repeat_index,
+                        "end_to_end_pricing_runtime_s": float(runtime_s),
+                        "end_to_end_runtime_per_observation_s": float(runtime_s) / max(1, int(n_paths)),
+                        "path_and_payoff_runtime_s": "NA",
+                        "control_evaluation_runtime_s": "NA",
+                        "estimator_reduction_runtime_s": "NA",
+                        "setup_runtime_s": float(timed.get("setup_runtime_s", 0.0)),
+                        "component_runtime_measurement_status": "not_separately_measured",
+                    }
+                )
     return profiles
 
 
@@ -510,6 +525,7 @@ def _timed_ncv_end_to_end(network: _ShallowNet, cfg: ModelConfig, torch_mod, rep
         "estimator_reduction_runtime_s": float(statistics.median(times_reduce)),
         "end_to_end_pricing_runtime_s": float(statistics.median(times_end_to_end)),
         "torch_tensor_conversion_inside_pricing_timing": True,
+        "repeat_end_to_end_runtime_s": [float(x) for x in times_end_to_end],
     }
 
 
@@ -527,24 +543,38 @@ def measure_end_to_end_pricing_runtime_profile(
     print(f"[timing-path-count] {progress_context} method=NCV n_paths={int(n_paths)}", flush=True)
     cfg = _make_reference_cfg(monitoring_dates=monitoring_dates, n_paths=n_paths, seed=pricing_seed)
     ncv_timed = _timed_ncv_end_to_end(network, cfg, torch_mod, repeats=timing_repeats)
+    repeated = [float(x) for x in ncv_timed.get("repeat_end_to_end_runtime_s", [])]
+    if not repeated:
+        repeated = [float(ncv_timed["end_to_end_pricing_runtime_s"])]
     return {
         "method": "NCV",
         "n_paths": int(n_paths),
         "timing_repeats": int(max(1, timing_repeats)),
         "timing_path_counts": str(int(n_paths)),
-        **ncv_timed,
-        "end_to_end_runtime_per_observation_s": ncv_timed["end_to_end_pricing_runtime_s"] / max(1, cfg.n_paths),
+        "torch_tensor_conversion_inside_pricing_timing": bool(
+            ncv_timed.get("torch_tensor_conversion_inside_pricing_timing", False)
+        ),
+        "repeat_end_to_end_runtime_s": repeated,
     }
 
 
-def assess_runtime_scaling(profiles: list[dict[str, Any]], method: str) -> dict[str, Any]:
-    points = [
-        (int(p["n_paths"]), float(p["end_to_end_pricing_runtime_s"]))
-        for p in profiles
-        if p.get("method") == method
-    ]
-    points = [pt for pt in points if pt[0] > 0 and math.isfinite(pt[1])]
+def _aggregated_runtime_points(profiles: list[dict[str, Any]], method: str) -> list[tuple[int, float]]:
+    grouped: dict[int, list[float]] = {}
+    for row in profiles:
+        if row.get("method") != method:
+            continue
+        n_paths = int(row.get("n_paths", 0))
+        runtime = row.get("end_to_end_pricing_runtime_s")
+        if n_paths <= 0 or not isinstance(runtime, (int, float)) or not math.isfinite(float(runtime)):
+            continue
+        grouped.setdefault(n_paths, []).append(float(runtime))
+    points = [(n, statistics.median(times)) for n, times in grouped.items() if times]
     points.sort(key=lambda x: x[0])
+    return points
+
+
+def assess_runtime_scaling(profiles: list[dict[str, Any]], method: str) -> dict[str, Any]:
+    points = _aggregated_runtime_points(profiles, method)
     per_obs = [t / n for n, t in points]
     linearity_ratio = (max(per_obs) / min(per_obs)) if per_obs and min(per_obs) > 0 else float("inf")
     is_linear = bool(per_obs) and math.isfinite(linearity_ratio) and linearity_ratio <= 1.15
@@ -560,10 +590,7 @@ def assess_runtime_scaling(profiles: list[dict[str, Any]], method: str) -> dict[
 
 def project_runtime_at_n(profiles: list[dict[str, Any]], method: str, n_required: int) -> dict[str, Any]:
     scaling = assess_runtime_scaling(profiles, method)
-    method_rows = [p for p in profiles if p.get("method") == method]
-    points = [(int(p["n_paths"]), float(p["end_to_end_pricing_runtime_s"])) for p in method_rows]
-    points = [pt for pt in points if pt[0] > 0 and math.isfinite(pt[1])]
-    points.sort(key=lambda x: x[0])
+    points = _aggregated_runtime_points(profiles, method)
     if not points:
         return {
             **scaling,
@@ -593,15 +620,42 @@ def project_runtime_at_n(profiles: list[dict[str, Any]], method: str, n_required
     }
 
 
-def _confidence95(values: list[float]) -> tuple[float, float]:
+def _student_t_confidence95(values: list[float]) -> dict[str, Any]:
     if not values:
-        return float("nan"), float("nan")
-    if len(values) == 1:
-        return values[0], values[0]
+        return {
+            "ci95_lower": "NA",
+            "ci95_upper": "NA",
+            "ci_method": "NA",
+            "ci_degrees_of_freedom": "NA",
+            "ci_critical_value": "NA",
+            "ci_status": "no_observations",
+            "ci_note": "n=0; CI undefined; no observations",
+        }
+    n = len(values)
+    if n == 1:
+        return {
+            "ci95_lower": "NA",
+            "ci95_upper": "NA",
+            "ci_method": "NA",
+            "ci_degrees_of_freedom": "NA",
+            "ci_critical_value": "NA",
+            "ci_status": "undefined_n_equals_1",
+            "ci_note": "n=1; CI undefined; mean only reported",
+        }
     m = statistics.mean(values)
     s = statistics.stdev(values)
-    half = 1.96 * s / math.sqrt(len(values))
-    return m - half, m + half
+    dof = n - 1
+    t_crit = float(_t_dist.ppf(0.975, df=dof))
+    half = t_crit * s / math.sqrt(n)
+    return {
+        "ci95_lower": float(m - half),
+        "ci95_upper": float(m + half),
+        "ci_method": "student-t",
+        "ci_degrees_of_freedom": int(dof),
+        "ci_critical_value": float(t_crit),
+        "ci_status": "ok",
+        "ci_note": f"two-sided Student-t; dof={dof}; t_crit={t_crit:.6g}",
+    }
 
 
 def summarize_rows(rows: list[dict[str, Any]], group_keys: list[str], metrics: list[str]) -> list[dict[str, Any]]:
@@ -617,7 +671,7 @@ def summarize_rows(rows: list[dict[str, Any]], group_keys: list[str], metrics: l
             vals = [float(r[metric]) for r in items if isinstance(r.get(metric), (int, float)) and math.isfinite(float(r[metric]))]
             if not vals:
                 continue
-            lo, hi = _confidence95(vals)
+            ci = _student_t_confidence95(vals)
             out.append(
                 {
                     **base,
@@ -628,8 +682,7 @@ def summarize_rows(rows: list[dict[str, Any]], group_keys: list[str], metrics: l
                     "median": float(statistics.median(vals)),
                     "minimum": float(min(vals)),
                     "maximum": float(max(vals)),
-                    "ci95_lower": float(lo),
-                    "ci95_upper": float(hi),
+                    **ci,
                 }
             )
     out.sort(key=lambda r: tuple(r[k] for k in group_keys) + (r["metric"],))
@@ -665,6 +718,7 @@ def required_output_files() -> list[str]:
         "training_curve_environment.json",
         "training_curve_seed_manifest.csv",
         "training_curve_per_replication.csv",
+        "training_curve_runtime_benchmarks.csv",
         "training_curve_summary.csv",
         "training_curve_diminishing_returns.csv",
         "training_curve_optimal_checkpoints.csv",
@@ -812,6 +866,223 @@ def validate_numeric_content(
     return errors, warnings
 
 
+def _parse_basis_n(value: Any) -> list[int]:
+    if isinstance(value, list):
+        return [int(x) for x in value]
+    if isinstance(value, tuple):
+        return [int(x) for x in value]
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split("|") if p.strip()]
+        out: list[int] = []
+        for part in parts:
+            try:
+                out.append(int(part))
+            except Exception:
+                continue
+        return out
+    return []
+
+
+def _method_runtime_points_from_raw(raw_rows: list[dict[str, Any]], replication: int, method: str) -> list[tuple[int, float]]:
+    grouped: dict[int, list[float]] = {}
+    for row in raw_rows:
+        if int(row.get("replication", -1)) != int(replication) or row.get("method") != method:
+            continue
+        n_paths = int(row.get("timing_path_count", 0))
+        runtime = row.get("end_to_end_runtime_s")
+        if n_paths <= 0 or not isinstance(runtime, (int, float)) or not math.isfinite(float(runtime)):
+            continue
+        grouped.setdefault(n_paths, []).append(float(runtime))
+    points = [(n, statistics.median(times)) for n, times in grouped.items() if times]
+    points.sort(key=lambda x: x[0])
+    return points
+
+
+def _method_runtime_profiles_from_raw(raw_rows: list[dict[str, Any]], replication: int, method: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in raw_rows:
+        if int(row.get("replication", -1)) != int(replication) or row.get("method") != method:
+            continue
+        out.append(
+            {
+                "method": method,
+                "n_paths": int(row.get("timing_path_count", 0)),
+                "end_to_end_pricing_runtime_s": row.get("end_to_end_runtime_s"),
+            }
+        )
+    return out
+
+
+def validate_runtime_benchmarks(
+    raw_rows: list[dict[str, Any]],
+    per_replication_rows: list[dict[str, Any]],
+    gcv_rows: list[dict[str, Any]],
+    optimal_rows: list[dict[str, Any]],
+    config: TrainingCurveConfig,
+) -> tuple[list[str], list[str], dict[str, Any]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    expected_rows = int(config.replications) * 4 * len(config.timing_path_counts) * int(max(1, config.timing_repeats))
+    if len(raw_rows) != expected_rows:
+        errors.append(f"runtime_benchmarks: expected {expected_rows} rows, found {len(raw_rows)}")
+
+    key_seen: set[tuple[Any, ...]] = set()
+    expected_composite = {
+        (rep, method, int(n), repeat)
+        for rep in range(int(config.replications))
+        for method in ("MC", "AV", "GCV", "NCV")
+        for n in config.timing_path_counts
+        for repeat in range(1, int(max(1, config.timing_repeats)) + 1)
+    }
+    observed_composite: set[tuple[int, str, int, int]] = set()
+    for row in raw_rows:
+        rid = (
+            row.get("replication"),
+            row.get("method"),
+            row.get("ncv_checkpoint"),
+            row.get("timing_path_count"),
+            row.get("repeat_index"),
+        )
+        if rid in key_seen:
+            errors.append(f"runtime_benchmarks: duplicate key {rid}")
+        key_seen.add(rid)
+        observed_composite.add(
+            (
+                int(row.get("replication", -1)),
+                str(row.get("method")),
+                int(row.get("timing_path_count", -1)),
+                int(row.get("repeat_index", -1)),
+            )
+        )
+
+        runtime = row.get("end_to_end_runtime_s")
+        if not _is_finite_non_negative_number(runtime):
+            errors.append(f"runtime_benchmarks {rid}: non-finite/negative end_to_end_runtime_s")
+
+        obs = row.get("pricing_observations")
+        per_obs = row.get("end_to_end_runtime_per_observation_s")
+        if not isinstance(obs, int) or obs <= 0:
+            errors.append(f"runtime_benchmarks {rid}: invalid pricing_observations")
+        elif not _is_finite_non_negative_number(per_obs):
+            errors.append(f"runtime_benchmarks {rid}: non-finite/negative per-observation runtime")
+        else:
+            expected_per_obs = float(runtime) / float(obs)
+            if abs(float(per_obs) - expected_per_obs) > 1e-12 * max(1.0, abs(expected_per_obs)):
+                errors.append(f"runtime_benchmarks {rid}: per-observation runtime mismatch")
+
+        if row.get("timing_path_count") not in {int(x) for x in config.timing_path_counts}:
+            errors.append(f"runtime_benchmarks {rid}: timing_path_count not in profile")
+        if not (1 <= int(row.get("repeat_index", 0)) <= int(max(1, config.timing_repeats))):
+            errors.append(f"runtime_benchmarks {rid}: repeat_index out of profile range")
+        if int(row.get("timing_repeats_configured", 0)) != int(max(1, config.timing_repeats)):
+            errors.append(f"runtime_benchmarks {rid}: timing_repeats_configured mismatch")
+        if row.get("runtime_projection_is_empirical_or_projected") != "empirical":
+            errors.append(f"runtime_benchmarks {rid}: raw row must be labelled empirical")
+        if row.get("method") == "NCV":
+            if not isinstance(row.get("ncv_checkpoint"), int):
+                errors.append(f"runtime_benchmarks {rid}: NCV rows must include integer ncv_checkpoint")
+        elif not _is_na_marker(row.get("ncv_checkpoint")):
+            errors.append(f"runtime_benchmarks {rid}: non-NCV rows must use ncv_checkpoint=NA")
+        if row.get("component_runtime_measurement_status") != "not_separately_measured":
+            errors.append(f"runtime_benchmarks {rid}: component_runtime_measurement_status must be not_separately_measured")
+        for field in ("path_and_payoff_runtime_s", "control_evaluation_runtime_s", "estimator_reduction_runtime_s"):
+            if not _is_na_marker(row.get(field)):
+                errors.append(f"runtime_benchmarks {rid}: {field} must be NA")
+    if observed_composite != expected_composite:
+        missing = sorted(expected_composite - observed_composite)
+        extra = sorted(observed_composite - expected_composite)
+        if missing:
+            errors.append(f"runtime_benchmarks: missing expected timing combinations: {missing[:5]}")
+        if extra:
+            errors.append(f"runtime_benchmarks: unexpected timing combinations: {extra[:5]}")
+
+    basis_expected = "|".join(str(int(x)) for x in config.timing_path_counts)
+    for row in per_replication_rows:
+        rep = int(row.get("replication", -1))
+        points = _method_runtime_points_from_raw(raw_rows, rep, "NCV")
+        observed_basis = "|".join(str(n) for n, _ in points)
+        if row.get("runtime_projection_basis_n") != observed_basis:
+            errors.append(f"rep={rep},cp={row.get('checkpoint')},split={row.get('split')}: runtime_projection_basis_n mismatch")
+        scaling = assess_runtime_scaling(
+            _method_runtime_profiles_from_raw(raw_rows, rep, "NCV"),
+            "NCV",
+        )
+        if row.get("runtime_projection_method") != scaling["runtime_projection_method"]:
+            errors.append(f"rep={rep},cp={row.get('checkpoint')},split={row.get('split')}: runtime_projection_method mismatch")
+        ratio = scaling["runtime_projection_linearity_ratio"]
+        row_ratio = row.get("runtime_projection_linearity_ratio")
+        if isinstance(ratio, (int, float)) and isinstance(row_ratio, (int, float)):
+            if abs(float(ratio) - float(row_ratio)) > 1e-12 * max(1.0, abs(float(ratio))):
+                errors.append(f"rep={rep},cp={row.get('checkpoint')},split={row.get('split')}: linearity_ratio mismatch")
+        elif str(ratio) != str(row_ratio):
+            errors.append(f"rep={rep},cp={row.get('checkpoint')},split={row.get('split')}: linearity_ratio mismatch")
+        if row.get("timing_path_counts") != basis_expected:
+            errors.append(f"rep={rep},cp={row.get('checkpoint')},split={row.get('split')}: timing_path_counts mismatch")
+        if int(row.get("timing_repeats", 0)) != int(max(1, config.timing_repeats)):
+            errors.append(f"rep={rep},cp={row.get('checkpoint')},split={row.get('split')}: timing_repeats mismatch")
+        basis_set = set(_parse_basis_n(row.get("runtime_projection_basis_n")))
+        if int(config.pricing_observations_for_reporting) not in basis_set and row.get("runtime_at_required_n_is_empirical_or_projected") == "empirical":
+            errors.append(f"rep={rep},cp={row.get('checkpoint')},split={row.get('split')}: projected reporting runtime mislabelled empirical")
+
+    for row in gcv_rows:
+        rep = int(row.get("replication", -1))
+        points = _method_runtime_points_from_raw(raw_rows, rep, "GCV")
+        observed_basis = "|".join(str(n) for n, _ in points)
+        if row.get("runtime_projection_basis_n") != observed_basis:
+            errors.append(f"rep={rep},split={row.get('split')}: GCV runtime_projection_basis_n mismatch")
+        scaling = assess_runtime_scaling(
+            _method_runtime_profiles_from_raw(raw_rows, rep, "GCV"),
+            "GCV",
+        )
+        if row.get("runtime_projection_method") != scaling["runtime_projection_method"]:
+            errors.append(f"rep={rep},split={row.get('split')}: GCV runtime_projection_method mismatch")
+        basis_set = set(_parse_basis_n(row.get("runtime_projection_basis_n")))
+        if int(config.pricing_observations_for_reporting) not in basis_set and row.get("runtime_at_required_n_is_empirical_or_projected") == "empirical":
+            errors.append(f"rep={rep},split={row.get('split')}: GCV projected reporting runtime mislabelled empirical")
+
+    for row in optimal_rows:
+        rep = int(row.get("replication", -1))
+        n_req = int(row.get("required_pricing_observations", 0))
+        basis = _parse_basis_n(row.get("runtime_projection_basis_n"))
+        runtime_label = row.get("runtime_at_required_n_is_empirical_or_projected")
+        runtime_req = project_runtime_at_n(
+            _method_runtime_profiles_from_raw(raw_rows, rep, "NCV"),
+            "NCV",
+            n_req,
+        )
+        if row.get("runtime_projection_method") != runtime_req["runtime_projection_method"]:
+            errors.append(f"rep={rep},cp={row.get('checkpoint')},Q={row.get('Q')}: runtime_projection_method mismatch")
+        expected_ratio = runtime_req["runtime_projection_linearity_ratio"]
+        observed_ratio = row.get("runtime_projection_linearity_ratio")
+        if isinstance(expected_ratio, (int, float)) and isinstance(observed_ratio, (int, float)):
+            if abs(float(expected_ratio) - float(observed_ratio)) > 1e-12 * max(1.0, abs(float(expected_ratio))):
+                errors.append(f"rep={rep},cp={row.get('checkpoint')},Q={row.get('Q')}: linearity_ratio mismatch")
+        elif str(expected_ratio) != str(observed_ratio):
+            errors.append(f"rep={rep},cp={row.get('checkpoint')},Q={row.get('Q')}: linearity_ratio mismatch")
+        if n_req in set(basis):
+            if runtime_label != "empirical":
+                errors.append(f"rep={rep},cp={row.get('checkpoint')},Q={row.get('Q')}: empirical required N mislabelled")
+        else:
+            if runtime_label == "empirical":
+                errors.append(f"rep={rep},cp={row.get('checkpoint')},Q={row.get('Q')}: projected required N mislabelled empirical")
+        gcv_req = int(row.get("gcv_required_pricing_observations", 0))
+        gcv_runtime_req = project_runtime_at_n(
+            _method_runtime_profiles_from_raw(raw_rows, rep, "GCV"),
+            "GCV",
+            gcv_req,
+        )
+        gcv_basis = _parse_basis_n(gcv_runtime_req["runtime_projection_basis_n"])
+        gcv_label = row.get("gcv_runtime_at_required_n_is_empirical_or_projected")
+        if gcv_req in set(gcv_basis):
+            if gcv_label != "empirical":
+                errors.append(f"rep={rep},cp={row.get('checkpoint')},Q={row.get('Q')}: GCV empirical required N mislabelled")
+        else:
+            if gcv_label == "empirical":
+                errors.append(f"rep={rep},cp={row.get('checkpoint')},Q={row.get('Q')}: GCV projected required N mislabelled empirical")
+
+    return errors, warnings, {"expected_row_count": expected_rows, "actual_row_count": len(raw_rows)}
+
+
 def build_handover_text(config: TrainingCurveConfig, facts: dict[str, Any]) -> str:
     return "\n".join(
         [
@@ -835,10 +1106,12 @@ def build_handover_text(config: TrainingCurveConfig, facts: dict[str, Any]) -> s
             f"- Profile: {config.profile}",
             f"- Replications: {config.replications}",
             f"- Checkpoints: {list(config.checkpoints)}",
+            f"- default_epochs (training-curve scope): {config.default_epochs} ({config.default_epochs_scope})",
             "- Uses independent training, validation, and held-out test splits per replication.",
             "- Trains one continuous network per replication and snapshots checkpoints without re-initialization.",
             "- NCV operational setup cost uses training-data generation + optimizer cumulative runtime for checkpoint > 0, and is 0 at checkpoint 0.",
             "- Validation-generation/evaluation runtime is reported as research/tuning overhead and excluded from operational setup cost.",
+            "- Runtime benchmark raw file `training_curve_runtime_benchmarks.csv` is the sole empirical source for repeat aggregation, linearity checks, and projection inputs.",
             "",
             "## Output-rescaling note (no new estimator added)",
             "The existing transferred control coefficient beta already provides scalar output rescaling.",
@@ -867,6 +1140,10 @@ def _fixed_checkpoint_plot_descriptor(checkpoints: list[int], fixed_checkpoint: 
     }
 
 
+def _cost_panel_line_style_descriptors() -> tuple[str, str]:
+    return ("solid = NCV", "dashed = GCV")
+
+
 def _plot_summary_figure(
     output_dir: Path,
     checkpoints: list[int],
@@ -877,6 +1154,7 @@ def _plot_summary_figure(
     fixed_checkpoint: int,
 ) -> None:
     import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
 
     def _series(metric: str, split: str = "validation"):
         by_cp: dict[int, list[float]] = {cp: [] for cp in checkpoints}
@@ -891,13 +1169,11 @@ def _plot_summary_figure(
         bands = []
         for cp in checkpoints:
             vals = by_cp[cp]
-            if len(vals) >= 2:
-                m = statistics.mean(vals)
-                s = statistics.stdev(vals)
-                h = 1.96 * s / math.sqrt(len(vals))
-                bands.append((m - h, m + h))
-            elif len(vals) == 1:
-                bands.append((vals[0], vals[0]))
+            ci = _student_t_confidence95(vals)
+            lo = ci["ci95_lower"]
+            hi = ci["ci95_upper"]
+            if isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
+                bands.append((float(lo), float(hi)))
             else:
                 bands.append((float("nan"), float("nan")))
         lows = [b[0] for b in bands]
@@ -932,6 +1208,11 @@ def _plot_summary_figure(
     gcv_val = [r for r in gcv_rows if r["split"] == "validation"]
     gcv_var = statistics.mean([float(r["gcv_residual_variance"]) for r in gcv_val if math.isfinite(float(r["gcv_residual_variance"]))]) if gcv_val else float("nan")
     gcv_rate = statistics.mean([float(r.get("end_to_end_runtime_per_observation_s", float("nan"))) for r in gcv_val if math.isfinite(float(r.get("end_to_end_runtime_per_observation_s", float("nan"))))]) if gcv_val else float("nan")
+    solid_label, dashed_label = _cost_panel_line_style_descriptors()
+    style_handles = [
+        Line2D([0], [0], color="black", linestyle="-", label=solid_label),
+        Line2D([0], [0], color="black", linestyle="--", label=dashed_label),
+    ]
     for q in q_values:
         ys = []
         for cp in checkpoints:
@@ -949,11 +1230,11 @@ def _plot_summary_figure(
                     )
                 )
             ys.append(statistics.mean(vals) if vals else float("nan"))
-        axes[2].plot(checkpoints, ys, label=f"Q={q}")
+        line = axes[2].plot(checkpoints, ys, linestyle="-", label=f"NCV Q={q}")[0]
         if math.isfinite(gcv_var) and math.isfinite(gcv_rate):
             gcv_n = compute_required_paths(gcv_var, target_se)
             gcv_cost = compute_total_cost(0.0, gcv_n, gcv_rate, q)
-            axes[2].axhline(gcv_cost, linestyle="--", linewidth=0.8, alpha=0.6)
+            axes[2].axhline(gcv_cost, linestyle="--", linewidth=0.8, alpha=0.6, color=line.get_color(), label=f"GCV Q={q}")
     fixed_desc = _fixed_checkpoint_plot_descriptor(checkpoints, fixed_checkpoint)
     if fixed_desc["line_epoch"] is not None:
         axes[2].axvline(
@@ -976,7 +1257,8 @@ def _plot_summary_figure(
     axes[2].set_xlabel("Epoch")
     axes[2].set_ylabel("Projected total cost (end-to-end)")
     axes[2].set_yscale("log")
-    axes[2].legend()
+    handles, labels = axes[2].get_legend_handles_labels()
+    axes[2].legend(handles + style_handles, labels + [h.get_label() for h in style_handles])
 
     fig.tight_layout()
     fig.savefig(output_dir / "ncv_training_curve_summary.png", dpi=200)
@@ -1018,6 +1300,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
     diminishing_rows: list[dict[str, Any]] = []
     optimal_rows: list[dict[str, Any]] = []
     gcv_rows: list[dict[str, Any]] = []
+    runtime_benchmark_rows: list[dict[str, Any]] = []
 
     # Warm-up (unrecorded)
     _ = np.random.default_rng(777).standard_normal((64, 64)) @ np.random.default_rng(778).standard_normal((64, 64)).T
@@ -1050,6 +1333,34 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
             gcv_pilot_fit=gcv_pilot_fit,
             progress_context=f"rep={rep}",
         )
+        for profile in baseline_runtime_profiles:
+            observations = int(profile["n_paths"])
+            simulated_paths = observations * 2 if profile["method"] == "AV" else observations
+            runtime_benchmark_rows.append(
+                {
+                    "replication": rep,
+                    "method": profile["method"],
+                    "ncv_checkpoint": "NA",
+                    "timing_path_count": observations,
+                    "pricing_observations": observations,
+                    "simulated_paths": simulated_paths,
+                    "repeat_index": int(profile.get("repeat_index", 1)),
+                    "end_to_end_runtime_s": float(profile["end_to_end_pricing_runtime_s"]),
+                    "end_to_end_runtime_per_observation_s": float(profile["end_to_end_runtime_per_observation_s"]),
+                    "runtime_scope": "end_to_end_pricing_rng_path_payoff_control_estimator",
+                    "torch_tensor_conversion_inside_timing": bool(
+                        profile.get("torch_tensor_conversion_inside_pricing_timing", False)
+                    ),
+                    "profile": config.profile,
+                    "timing_repeats_configured": int(config.timing_repeats),
+                    "timing_path_counts_configured": "|".join(str(x) for x in config.timing_path_counts),
+                    "runtime_projection_is_empirical_or_projected": "empirical",
+                    "path_and_payoff_runtime_s": "NA",
+                    "control_evaluation_runtime_s": "NA",
+                    "estimator_reduction_runtime_s": "NA",
+                    "component_runtime_measurement_status": "not_separately_measured",
+                }
+            )
         gcv_reporting_projection = project_runtime_at_n(
             baseline_runtime_profiles,
             "GCV",
@@ -1186,8 +1497,9 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
         else:
             selected_runtime_checkpoint = int(checkpoints[0])
         selected_snapshot = snapshots[selected_runtime_checkpoint]
-        ncv_runtime_profiles = [
-            measure_end_to_end_pricing_runtime_profile(
+        ncv_runtime_profiles: list[dict[str, Any]] = []
+        for i, n_paths in enumerate(config.timing_path_counts):
+            measured = measure_end_to_end_pricing_runtime_profile(
                 network=selected_snapshot["network"],
                 monitoring_dates=config.monitoring_dates,
                 pricing_seed=seeds["test"] + selected_runtime_checkpoint * 10_000 + 101 + i,
@@ -1196,10 +1508,52 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                 torch_mod=torch,
                 progress_context=f"rep={rep},checkpoint={selected_runtime_checkpoint}",
             )
-            for i, n_paths in enumerate(config.timing_path_counts)
-        ]
-        for profile in ncv_runtime_profiles:
-            profile["timing_path_counts"] = "|".join(str(x) for x in config.timing_path_counts)
+            repeated = [float(x) for x in measured.get("repeat_end_to_end_runtime_s", [])]
+            if not repeated:
+                repeated = [float("nan")]
+            for repeat_index, runtime_s in enumerate(repeated, start=1):
+                row = {
+                    "method": "NCV",
+                    "n_paths": int(n_paths),
+                    "timing_repeats": int(max(1, config.timing_repeats)),
+                    "timing_path_counts": "|".join(str(x) for x in config.timing_path_counts),
+                    "repeat_index": repeat_index,
+                    "end_to_end_pricing_runtime_s": float(runtime_s),
+                    "end_to_end_runtime_per_observation_s": float(runtime_s) / max(1, int(n_paths)),
+                    "torch_tensor_conversion_inside_pricing_timing": bool(
+                        measured.get("torch_tensor_conversion_inside_pricing_timing", False)
+                    ),
+                    "path_and_payoff_runtime_s": "NA",
+                    "control_evaluation_runtime_s": "NA",
+                    "estimator_reduction_runtime_s": "NA",
+                    "component_runtime_measurement_status": "not_separately_measured",
+                }
+                ncv_runtime_profiles.append(row)
+                runtime_benchmark_rows.append(
+                    {
+                        "replication": rep,
+                        "method": "NCV",
+                        "ncv_checkpoint": int(selected_runtime_checkpoint),
+                        "timing_path_count": int(n_paths),
+                        "pricing_observations": int(n_paths),
+                        "simulated_paths": int(n_paths),
+                        "repeat_index": repeat_index,
+                        "end_to_end_runtime_s": float(runtime_s),
+                        "end_to_end_runtime_per_observation_s": float(runtime_s) / max(1, int(n_paths)),
+                        "runtime_scope": "end_to_end_pricing_rng_path_payoff_control_estimator_with_numpy_to_torch_conversion",
+                        "torch_tensor_conversion_inside_timing": bool(
+                            measured.get("torch_tensor_conversion_inside_pricing_timing", False)
+                        ),
+                        "profile": config.profile,
+                        "timing_repeats_configured": int(config.timing_repeats),
+                        "timing_path_counts_configured": "|".join(str(x) for x in config.timing_path_counts),
+                        "runtime_projection_is_empirical_or_projected": "empirical",
+                        "path_and_payoff_runtime_s": "NA",
+                        "control_evaluation_runtime_s": "NA",
+                        "estimator_reduction_runtime_s": "NA",
+                        "component_runtime_measurement_status": "not_separately_measured",
+                    }
+                )
         runtime_tensor_conversion_flag = bool(
             any(bool(p.get("torch_tensor_conversion_inside_pricing_timing", False)) for p in ncv_runtime_profiles)
         )
@@ -1466,6 +1820,12 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
     env = collect_environment_metadata()
     env["seed"] = config.base_seed
     env_warnings: list[str] = []
+    env_errors: list[str] = []
+    matplotlib_version = str(env.get("matplotlib_version", "")).strip()
+    if matplotlib_version in {"", "NA"}:
+        env_errors.append("missing matplotlib_version in training_curve_environment.json")
+    elif matplotlib_version == "not-installed":
+        env_warnings.append("matplotlib_not_installed_plotting_dependency_missing")
     if config.profile == "dissertation" and not bool(env.get("virtual_environment_active", False)):
         env_warnings.append("dissertation_profile_running_outside_virtual_environment")
     env["warnings"] = env_warnings
@@ -1474,6 +1834,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
     _write_json(out_dir / "training_curve_environment.json", env)
     _write_csv(out_dir / "training_curve_seed_manifest.csv", seed_manifest)
     _write_csv(out_dir / "training_curve_per_replication.csv", per_replication_rows)
+    _write_csv(out_dir / "training_curve_runtime_benchmarks.csv", runtime_benchmark_rows)
     _write_csv(out_dir / "training_curve_summary.csv", summary_rows)
     _write_csv(out_dir / "training_curve_diminishing_returns.csv", diminishing_rows)
     _write_csv(out_dir / "training_curve_optimal_checkpoints.csv", optimal_rows)
@@ -1497,9 +1858,19 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
 
     validation_report = validate_output_schema(out_dir, include_report_in_presence_check=True)
     numeric_errors, numeric_warnings = validate_numeric_content(per_replication_rows, gcv_rows, optimal_rows)
+    benchmark_errors, benchmark_warnings, benchmark_stats = validate_runtime_benchmarks(
+        runtime_benchmark_rows,
+        per_replication_rows,
+        gcv_rows,
+        optimal_rows,
+        config,
+    )
     validation_report["errors"].extend(numeric_errors)
+    validation_report["errors"].extend(benchmark_errors)
     validation_report["warnings"].extend(numeric_warnings)
+    validation_report["warnings"].extend(benchmark_warnings)
     validation_report["warnings"].extend(env_warnings)
+    validation_report["errors"].extend(env_errors)
     validation_report["all_present"] = all(validation_report["exists"].values())
     validation_report["passed"] = validation_report["all_present"] and len(validation_report["errors"]) == 0
     validation_report.update(
@@ -1511,6 +1882,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
             "dissertation_monitoring_dates_252": config.monitoring_dates == 252 if config.profile == "dissertation" else True,
             "n_errors": len(validation_report["errors"]),
             "n_warnings": len(validation_report["warnings"]),
+            "runtime_benchmark_row_counts": benchmark_stats,
         }
     )
     _write_json(out_dir / "training_curve_validation_report.json", validation_report)
