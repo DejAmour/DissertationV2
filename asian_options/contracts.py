@@ -5,7 +5,7 @@ Seven-contract grid for Stage 8 frozen-NCV transfer experiments.
 
 Contract set
 ------------
-S0=100, r=0.05, m=12 fixed across all contracts; one parameter varies
+S0=100, r=0.05, m=252 fixed across all contracts; one parameter varies
 at a time relative to the reference contract.
 
 Contract labels and parameters::
@@ -38,7 +38,7 @@ from asian_options.config import ModelConfig
 # ---------------------------------------------------------------------------
 _S0 = 100.0
 _r = 0.05
-_m = 12
+_m = 252
 
 # Reference contract id
 REFERENCE_ID: str = "reference"
