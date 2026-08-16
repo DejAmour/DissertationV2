@@ -139,7 +139,7 @@ def test_reference_training_row_per_replication():
         )
         shared.append(sr)
     assert len(shared) == 2
-    assert {r[\"replication\"] for r in shared} == {0, 1}
+    assert {r["replication"] for r in shared} == {0, 1}
 
 
 def test_transfer_target_training_zero_and_costs():

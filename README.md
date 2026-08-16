@@ -137,6 +137,14 @@ seeds CUDA when available, and enables deterministic PyTorch algorithms where
 practical in warn-only mode. Determinism can still vary across hardware,
 drivers, and PyTorch builds, especially on CUDA-enabled systems.
 
+### Stage 8 runner commands
+
+```bash
+python scripts/run_stage8.py --profile smoke --output-dir experiment_runs
+python scripts/run_stage8.py --profile dissertation --output-dir experiment_runs
+python scripts/run_stage8.py --profile dissertation --output-dir experiment_runs --empirical-equal-budget
+```
+
 ## Data source attribution
 
 - Series: `DCOILBRENTEU` (Daily Europe Brent Spot Price FOB, USD/barrel)
