@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import dataclasses
 import json
 import math
@@ -15,7 +14,7 @@ import numpy as np
 from asian_options.analytical import geometric_asian_call_price
 from asian_options.config import ModelConfig, collect_environment_metadata, seed_everything
 from asian_options.contracts import make_contract_cfg
-from asian_options.estimators import antithetic_variates, geometric_control_variate, standard_monte_carlo
+from asian_options.estimators import antithetic_variates, standard_monte_carlo
 from asian_options.neural_cv import _ShallowNet, analytical_network_expectation, build_network
 from asian_options.payoffs import arithmetic_asian_call_payoff, geometric_asian_call_payoff
 from asian_options.simulate_gbm import simulate_paths
@@ -45,6 +44,9 @@ class TrainingCurveConfig:
     default_epochs: int
     train_batch_size: int
     runtime_repeats: int
+    pilot_paths: int
+    timing_path_counts: tuple[int, ...]
+    timing_repeats: int
     pricing_observations_for_reporting: int
     q_values: tuple[int, ...]
     se_targets: tuple[float, ...]
@@ -88,6 +90,9 @@ def profile_config(profile: str, output_dir: str, base_seed: int = 42) -> Traini
             default_epochs=100,
             train_batch_size=256,
             runtime_repeats=3,
+            pilot_paths=50,
+            timing_path_counts=(100, 500),
+            timing_repeats=1,
             pricing_observations_for_reporting=50_000,
             q_values=(1, 10, 100, 1000),
             se_targets=(0.001,),
@@ -108,6 +113,9 @@ def profile_config(profile: str, output_dir: str, base_seed: int = 42) -> Traini
             default_epochs=100,
             train_batch_size=256,
             runtime_repeats=5,
+            pilot_paths=1_000,
+            timing_path_counts=(1_000, 5_000, 10_000),
+            timing_repeats=3,
             pricing_observations_for_reporting=50_000,
             q_values=(1, 10, 100, 1000),
             se_targets=(0.001,),
@@ -321,7 +329,31 @@ def _maybe_cuda_sync(torch_mod) -> None:
     cuda.synchronize()
 
 
-def _timed_mc_av_gcv(method: str, cfg: ModelConfig, n_pilot: int = 0, repeats: int = 1) -> dict[str, float]:
+def _fit_gcv_pilot_once(cfg: ModelConfig, n_pilot: int) -> dict[str, float]:
+    if n_pilot < 2:
+        raise ValueError(f"n_pilot must be >= 2, got {n_pilot}")
+    t0 = time.perf_counter()
+    pilot_cfg = dataclasses.replace(cfg, n_paths=n_pilot, seed=cfg.seed)
+    pilot_paths = simulate_paths(pilot_cfg)
+    x_pilot = arithmetic_asian_call_payoff(pilot_paths, pilot_cfg)
+    g_pilot = geometric_asian_call_payoff(pilot_paths, pilot_cfg)
+    var_g = _sample_var(g_pilot)
+    cov_xg = float(np.cov(x_pilot, g_pilot, ddof=1)[0, 1]) if x_pilot.size > 1 else float("nan")
+    beta = cov_xg / var_g if math.isfinite(var_g) and var_g > 0 else float("nan")
+    return {
+        "beta": beta,
+        "eg": float(geometric_asian_call_price(cfg)),
+        "pilot_runtime_s": time.perf_counter() - t0,
+    }
+
+
+def _timed_mc_av_gcv(
+    method: str,
+    cfg: ModelConfig,
+    n_pilot: int = 0,
+    repeats: int = 1,
+    gcv_pilot_fit: dict[str, float] | None = None,
+) -> dict[str, float]:
     times_path_and_payoff: list[float] = []
     times_control: list[float] = []
     times_reduce: list[float] = []
@@ -346,13 +378,24 @@ def _timed_mc_av_gcv(method: str, cfg: ModelConfig, n_pilot: int = 0, repeats: i
             times_setup.append(0.0)
             continue
         if method == "GCV":
-            res = geometric_control_variate(cfg, n_pilot=n_pilot)
-            end_to_end = float(res.pricing_runtime_seconds)
+            if gcv_pilot_fit is None:
+                gcv_pilot_fit = _fit_gcv_pilot_once(cfg, n_pilot)
+            rng = np.random.default_rng(cfg.seed + 1 + _)
+            t0 = time.perf_counter()
+            z = rng.standard_normal((cfg.n_paths, cfg.m))
+            paths = simulate_paths(cfg, shocks=z)
+            x = arithmetic_asian_call_payoff(paths, cfg)
+            g = geometric_asian_call_payoff(paths, cfg)
+            beta = float(gcv_pilot_fit["beta"])
+            eg = float(gcv_pilot_fit["eg"])
+            corrected = x - beta * (g - eg) if math.isfinite(beta) else x
+            _price = float(np.mean(corrected))
+            end_to_end = time.perf_counter() - t0
             times_end_to_end.append(end_to_end)
             times_path_and_payoff.append(end_to_end)
             times_control.append(0.0)
             times_reduce.append(0.0)
-            times_setup.append(float(res.training_runtime_seconds))
+            times_setup.append(float(gcv_pilot_fit["pilot_runtime_s"]))
             continue
         raise ValueError(f"Unsupported method: {method}")
 
@@ -368,6 +411,48 @@ def _timed_mc_av_gcv(method: str, cfg: ModelConfig, n_pilot: int = 0, repeats: i
         "end_to_end_pricing_runtime_s": float(end_to_end),
         "setup_runtime_s": float(setup),
     }
+
+
+def build_runtime_profiles(
+    *,
+    methods: tuple[str, ...],
+    monitoring_dates: int,
+    seed_base: int,
+    timing_path_counts: tuple[int, ...],
+    timing_repeats: int,
+    n_pilot: int,
+    gcv_pilot_fit: dict[str, float] | None = None,
+    progress_context: str,
+) -> list[dict[str, Any]]:
+    profiles: list[dict[str, Any]] = []
+    for method in methods:
+        print(f"[timing-method] {progress_context} method={method}", flush=True)
+        method_offset = {"MC": 11, "AV": 17, "GCV": 23}.get(method, 31)
+        for idx, n_paths in enumerate(timing_path_counts):
+            print(f"[timing-path-count] {progress_context} method={method} n_paths={int(n_paths)}", flush=True)
+            cfg = _make_reference_cfg(
+                monitoring_dates=monitoring_dates,
+                n_paths=int(n_paths),
+                seed=seed_base + (idx * 1_000) + method_offset,
+            )
+            timed = _timed_mc_av_gcv(
+                method,
+                cfg,
+                n_pilot=n_pilot,
+                repeats=timing_repeats,
+                gcv_pilot_fit=gcv_pilot_fit if method == "GCV" else None,
+            )
+            profiles.append(
+                {
+                    "method": method,
+                    "n_paths": int(n_paths),
+                    "timing_repeats": int(max(1, timing_repeats)),
+                    "timing_path_counts": "|".join(str(x) for x in timing_path_counts),
+                    **timed,
+                    "end_to_end_runtime_per_observation_s": timed["end_to_end_pricing_runtime_s"] / max(1, int(n_paths)),
+                }
+            )
+    return profiles
 
 
 def _timed_ncv_end_to_end(network: _ShallowNet, cfg: ModelConfig, torch_mod, repeats: int) -> dict[str, float]:
@@ -414,33 +499,30 @@ def measure_end_to_end_pricing_runtime_profile(
     monitoring_dates: int,
     pricing_seed: int,
     n_paths: int,
-    runtime_repeats: int,
+    timing_repeats: int,
     torch_mod,
-    n_pilot: int,
+    progress_context: str,
 ) -> dict[str, Any]:
+    print(f"[timing-method] {progress_context} method=NCV", flush=True)
+    print(f"[timing-path-count] {progress_context} method=NCV n_paths={int(n_paths)}", flush=True)
     cfg = _make_reference_cfg(monitoring_dates=monitoring_dates, n_paths=n_paths, seed=pricing_seed)
-    out: dict[str, Any] = {}
-    for method in ("MC", "AV", "GCV"):
-        timed = _timed_mc_av_gcv(method, cfg, n_pilot=n_pilot, repeats=runtime_repeats)
-        out[method] = {
-            **timed,
-            "end_to_end_runtime_per_observation_s": (
-                timed["end_to_end_pricing_runtime_s"] / max(1, cfg.n_paths)
-            ),
-        }
-    ncv_timed = _timed_ncv_end_to_end(network, cfg, torch_mod, repeats=runtime_repeats)
-    out["NCV"] = {
+    ncv_timed = _timed_ncv_end_to_end(network, cfg, torch_mod, repeats=timing_repeats)
+    return {
+        "method": "NCV",
+        "n_paths": int(n_paths),
+        "timing_repeats": int(max(1, timing_repeats)),
+        "timing_path_counts": str(int(n_paths)),
         **ncv_timed,
-        "end_to_end_runtime_per_observation_s": (
-            ncv_timed["end_to_end_pricing_runtime_s"] / max(1, cfg.n_paths)
-        ),
+        "end_to_end_runtime_per_observation_s": ncv_timed["end_to_end_pricing_runtime_s"] / max(1, cfg.n_paths),
     }
-    out["n_paths"] = int(n_paths)
-    return out
 
 
 def assess_runtime_scaling(profiles: list[dict[str, Any]], method: str) -> dict[str, Any]:
-    points = [(int(p["n_paths"]), float(p[method]["end_to_end_pricing_runtime_s"])) for p in profiles]
+    points = [
+        (int(p["n_paths"]), float(p["end_to_end_pricing_runtime_s"]))
+        for p in profiles
+        if p.get("method") == method
+    ]
     points = [pt for pt in points if pt[0] > 0 and math.isfinite(pt[1])]
     points.sort(key=lambda x: x[0])
     per_obs = [t / n for n, t in points]
@@ -453,6 +535,41 @@ def assess_runtime_scaling(profiles: list[dict[str, Any]], method: str) -> dict[
         "runtime_projection_is_empirical_or_projected": "projected_from_empirical_multi_n",
         "runtime_projection_linearity_ratio": float(linearity_ratio) if math.isfinite(linearity_ratio) else "NA",
         "runtime_projection_is_sufficiently_linear": is_linear,
+    }
+
+
+def project_runtime_at_n(profiles: list[dict[str, Any]], method: str, n_required: int) -> dict[str, Any]:
+    scaling = assess_runtime_scaling(profiles, method)
+    method_rows = [p for p in profiles if p.get("method") == method]
+    points = [(int(p["n_paths"]), float(p["end_to_end_pricing_runtime_s"])) for p in method_rows]
+    points = [pt for pt in points if pt[0] > 0 and math.isfinite(pt[1])]
+    points.sort(key=lambda x: x[0])
+    if not points:
+        return {
+            **scaling,
+            "projected_runtime_s": float("nan"),
+            "projected_per_observation_s": float("nan"),
+            "runtime_at_required_n_is_empirical_or_projected": "projected",
+        }
+
+    empirical = {n for n, _ in points}
+    if int(n_required) in empirical:
+        runtime = next(t for n, t in points if n == int(n_required))
+        projection_kind = "empirical"
+    elif scaling["runtime_projection_is_sufficiently_linear"]:
+        per_obs = statistics.median([t / n for n, t in points])
+        runtime = per_obs * int(n_required)
+        projection_kind = "projected"
+    else:
+        nearest_n, nearest_t = min(points, key=lambda x: abs(x[0] - int(n_required)))
+        runtime = nearest_t * (int(n_required) / nearest_n)
+        projection_kind = "projected"
+
+    return {
+        **scaling,
+        "projected_runtime_s": float(runtime),
+        "projected_per_observation_s": float(runtime) / max(1, int(n_required)),
+        "runtime_at_required_n_is_empirical_or_projected": projection_kind,
     }
 
 
@@ -742,6 +859,10 @@ def _plot_summary_figure(
 
 def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
     validate_checkpoints(config.checkpoints)
+    if not config.timing_path_counts:
+        raise ValueError("timing_path_counts cannot be empty")
+    if any(int(n) <= 0 for n in config.timing_path_counts):
+        raise ValueError("timing_path_counts must be strictly positive")
     seed_everything(config.base_seed)
     torch = __import__("torch")
 
@@ -777,66 +898,57 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
     _ = torch.randn(64, 64) @ torch.randn(64, 64).T
 
     for rep in range(config.replications):
+        print(f"[replication] {rep + 1}/{config.replications}", flush=True)
         seeds = replication_seeds(config.base_seed, rep)
         t_data = time.perf_counter()
         train_split = simulate_split_dataset(config.monitoring_dates, config.train_paths, seeds["train"])
         val_split = simulate_split_dataset(config.monitoring_dates, config.validation_paths, seeds["validation"])
         test_split = simulate_split_dataset(config.monitoring_dates, config.test_paths, seeds["test"])
-        pilot_split = simulate_split_dataset(config.monitoring_dates, config.validation_paths, seeds["gcv_pilot"])
+        pilot_split = simulate_split_dataset(config.monitoring_dates, config.pilot_paths, seeds["gcv_pilot"])
         data_generation_runtime_s = time.perf_counter() - t_data
 
         gcv_bench = compute_gcv_benchmark(val_split, test_split, pilot_split, n_reporting=config.pricing_observations_for_reporting)
-        gcv_cfg_reporting = _make_reference_cfg(
+        gcv_timing_cfg = _make_reference_cfg(
             monitoring_dates=config.monitoring_dates,
-            n_paths=config.pricing_observations_for_reporting,
+            n_paths=max(2, int(config.timing_path_counts[0])),
             seed=seeds["gcv_pilot"] + 991,
         )
-        gcv_runtime_reporting = _timed_mc_av_gcv("GCV", gcv_cfg_reporting, n_pilot=config.validation_paths, repeats=config.runtime_repeats)
-        gcv_runtime_small = _timed_mc_av_gcv(
-            "GCV",
-            _make_reference_cfg(
-                monitoring_dates=config.monitoring_dates,
-                n_paths=max(64, config.pricing_observations_for_reporting // 25),
-                seed=seeds["gcv_pilot"] + 997,
-            ),
-            n_pilot=config.validation_paths,
-            repeats=config.runtime_repeats,
+        gcv_pilot_fit = _fit_gcv_pilot_once(gcv_timing_cfg, config.pilot_paths)
+        baseline_runtime_profiles = build_runtime_profiles(
+            methods=("MC", "AV", "GCV"),
+            monitoring_dates=config.monitoring_dates,
+            seed_base=seeds["test"] + 90_000,
+            timing_path_counts=config.timing_path_counts,
+            timing_repeats=config.timing_repeats,
+            n_pilot=config.pilot_paths,
+            gcv_pilot_fit=gcv_pilot_fit,
+            progress_context=f"rep={rep}",
         )
-        gcv_runtime_medium = _timed_mc_av_gcv(
+        gcv_reporting_projection = project_runtime_at_n(
+            baseline_runtime_profiles,
             "GCV",
-            _make_reference_cfg(
-                monitoring_dates=config.monitoring_dates,
-                n_paths=max(256, config.pricing_observations_for_reporting // 5),
-                seed=seeds["gcv_pilot"] + 1003,
-            ),
-            n_pilot=config.validation_paths,
-            repeats=config.runtime_repeats,
-        )
-        gcv_scaling = assess_runtime_scaling(
-            [
-                {"n_paths": max(64, config.pricing_observations_for_reporting // 25), "GCV": gcv_runtime_small},
-                {"n_paths": max(256, config.pricing_observations_for_reporting // 5), "GCV": gcv_runtime_medium},
-                {"n_paths": config.pricing_observations_for_reporting, "GCV": gcv_runtime_reporting},
-            ],
-            "GCV",
+            config.pricing_observations_for_reporting,
         )
         for gr in gcv_bench:
             gcv_rows.append(
                 {
                     "replication": rep,
                     **gr,
-                    "path_and_payoff_runtime_s": gcv_runtime_reporting["path_and_payoff_runtime_s"],
-                    "control_evaluation_runtime_s": gcv_runtime_reporting["control_evaluation_runtime_s"],
-                    "estimator_reduction_runtime_s": gcv_runtime_reporting["estimator_reduction_runtime_s"],
-                    "end_to_end_pricing_runtime_s": gcv_runtime_reporting["end_to_end_pricing_runtime_s"],
-                    "end_to_end_runtime_per_observation_s": (
-                        gcv_runtime_reporting["end_to_end_pricing_runtime_s"] / max(1, config.pricing_observations_for_reporting)
-                    ),
-                    "gcv_pilot_runtime_s_end_to_end": gcv_runtime_reporting["setup_runtime_s"],
-                    "gcv_pilot_runtime_s": gcv_runtime_reporting["setup_runtime_s"],
-                    "runtime_projection_basis_n": "|".join(str(x) for x in gcv_scaling["runtime_projection_basis_n"]),
-                    "runtime_projection_method": gcv_scaling["runtime_projection_method"],
-                    "runtime_projection_is_empirical_or_projected": gcv_scaling["runtime_projection_is_empirical_or_projected"],
+                    "path_and_payoff_runtime_s": gcv_reporting_projection["projected_runtime_s"],
+                    "control_evaluation_runtime_s": 0.0,
+                    "estimator_reduction_runtime_s": 0.0,
+                    "end_to_end_pricing_runtime_s": gcv_reporting_projection["projected_runtime_s"],
+                    "end_to_end_runtime_per_observation_s": gcv_reporting_projection["projected_per_observation_s"],
+                    "gcv_pilot_runtime_s_end_to_end": gcv_pilot_fit["pilot_runtime_s"],
+                    "gcv_pilot_runtime_s": gcv_pilot_fit["pilot_runtime_s"],
+                    "timing_path_counts": "|".join(str(x) for x in config.timing_path_counts),
+                    "timing_repeats": int(config.timing_repeats),
+                    "runtime_projection_basis_n": "|".join(str(x) for x in gcv_reporting_projection["runtime_projection_basis_n"]),
+                    "runtime_projection_method": gcv_reporting_projection["runtime_projection_method"],
+                    "runtime_projection_linearity_ratio": gcv_reporting_projection["runtime_projection_linearity_ratio"],
+                    "runtime_projection_is_sufficiently_linear": gcv_reporting_projection["runtime_projection_is_sufficiently_linear"],
+                    "runtime_projection_is_empirical_or_projected": gcv_reporting_projection["runtime_projection_is_empirical_or_projected"],
+                    "runtime_at_required_n_is_empirical_or_projected": "projected",
                 }
             )
 
@@ -854,7 +966,6 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
         y_test = torch.tensor(test_split["payoff_arithmetic"], dtype=torch.float64)
 
         batch_size = min(config.train_batch_size, len(x_train))
-        train_loss_by_epoch: list[float] = []
         eval_no_grad_used = True
         snapshots: dict[int, dict[str, Any]] = {}
         checkpoints = list(config.checkpoints)
@@ -865,6 +976,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
         def evaluate_checkpoint(epoch: int, cumulative_runtime_s: float) -> None:
             nonlocal eval_no_grad_used
             nonlocal validation_eval_runtime_cumulative_s
+            print(f"[checkpoint] rep={rep} checkpoint={epoch}", flush=True)
             t_eval = time.perf_counter()
             model.eval()
             with torch.no_grad():
@@ -892,40 +1004,6 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                 n_reporting=config.pricing_observations_for_reporting,
             )
             inference = measure_inference_runtime(net_snapshot, test_split["Z"], config.runtime_repeats)
-            n_reporting = config.pricing_observations_for_reporting
-            n_small = max(64, n_reporting // 25)
-            n_medium = max(256, n_reporting // 5)
-            runtime_profiles = [
-                measure_end_to_end_pricing_runtime_profile(
-                    network=net_snapshot,
-                    monitoring_dates=config.monitoring_dates,
-                    pricing_seed=seeds["test"] + epoch * 1_000 + 11,
-                    n_paths=n_small,
-                    runtime_repeats=config.runtime_repeats,
-                    torch_mod=torch,
-                    n_pilot=config.validation_paths,
-                ),
-                measure_end_to_end_pricing_runtime_profile(
-                    network=net_snapshot,
-                    monitoring_dates=config.monitoring_dates,
-                    pricing_seed=seeds["test"] + epoch * 1_000 + 17,
-                    n_paths=n_medium,
-                    runtime_repeats=config.runtime_repeats,
-                    torch_mod=torch,
-                    n_pilot=config.validation_paths,
-                ),
-                measure_end_to_end_pricing_runtime_profile(
-                    network=net_snapshot,
-                    monitoring_dates=config.monitoring_dates,
-                    pricing_seed=seeds["test"] + epoch * 1_000 + 23,
-                    n_paths=n_reporting,
-                    runtime_repeats=config.runtime_repeats,
-                    torch_mod=torch,
-                    n_pilot=config.validation_paths,
-                ),
-            ]
-            ncv_scaling = assess_runtime_scaling(runtime_profiles, "NCV")
-            gcv_scaling = assess_runtime_scaling(runtime_profiles, "GCV")
             validation_eval_runtime_cumulative_s += time.perf_counter() - t_eval
 
             snapshots[epoch] = {
@@ -939,9 +1017,6 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                 "test_diag": test_diag,
                 "inference": inference,
                 "e_h": e_h,
-                "runtime_profiles": runtime_profiles,
-                "ncv_scaling": ncv_scaling,
-                "gcv_scaling": gcv_scaling,
                 "validation_generation_and_evaluation_runtime_s": validation_eval_runtime_cumulative_s,
             }
 
@@ -963,7 +1038,6 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                 loss.backward()
                 optimizer.step()
                 batch_losses.append(float(loss.item()))
-            train_loss_by_epoch.append(float(statistics.mean(batch_losses)))
             cumulative_training_s = time.perf_counter() - t_train_start
             if epoch in checkpoint_set:
                 evaluate_checkpoint(epoch, cumulative_training_s)
@@ -972,6 +1046,36 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
         if missing_checkpoints:
             raise RuntimeError(f"Missing checkpoint snapshots for epochs: {missing_checkpoints}")
 
+        val_rows_for_selection = [
+            {"checkpoint": cp, "residual_variance": snapshots[cp]["val_diag"]["residual_variance"]}
+            for cp in checkpoints
+            if math.isfinite(float(snapshots[cp]["val_diag"]["residual_variance"]))
+        ]
+        if val_rows_for_selection:
+            selected_runtime_checkpoint = int(min(val_rows_for_selection, key=lambda x: float(x["residual_variance"]))["checkpoint"])
+        else:
+            selected_runtime_checkpoint = int(checkpoints[0])
+        selected_snapshot = snapshots[selected_runtime_checkpoint]
+        ncv_runtime_profiles = [
+            measure_end_to_end_pricing_runtime_profile(
+                network=selected_snapshot["network"],
+                monitoring_dates=config.monitoring_dates,
+                pricing_seed=seeds["test"] + selected_runtime_checkpoint * 10_000 + 101 + i,
+                n_paths=int(n_paths),
+                timing_repeats=config.timing_repeats,
+                torch_mod=torch,
+                progress_context=f"rep={rep},checkpoint={selected_runtime_checkpoint}",
+            )
+            for i, n_paths in enumerate(config.timing_path_counts)
+        ]
+        for profile in ncv_runtime_profiles:
+            profile["timing_path_counts"] = "|".join(str(x) for x in config.timing_path_counts)
+        ncv_reporting_projection = project_runtime_at_n(
+            ncv_runtime_profiles,
+            "NCV",
+            config.pricing_observations_for_reporting,
+        )
+
         for cp in checkpoints:
             snap = snapshots[cp]
             cumulative = float(snap["cumulative_training_runtime_s"])
@@ -979,7 +1083,6 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
             previous_checkpoint_s = cumulative
 
             for split_name, diag in (("validation", snap["val_diag"]), ("test", snap["test_diag"])):
-                profile_reporting = snap["runtime_profiles"][-1]["NCV"]
                 row = {
                     "replication": rep,
                     "checkpoint": cp,
@@ -1010,23 +1113,21 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                     "training_data_generation_runtime_s": data_generation_runtime_s,
                     "optimizer_training_runtime_s": 0.0 if cp == 0 else incremental,
                     "validation_generation_and_evaluation_runtime_s": snap["validation_generation_and_evaluation_runtime_s"],
-                    "path_and_payoff_runtime_s": profile_reporting["path_and_payoff_runtime_s"],
-                    "control_evaluation_runtime_s": profile_reporting["control_evaluation_runtime_s"],
-                    "estimator_reduction_runtime_s": profile_reporting["estimator_reduction_runtime_s"],
-                    "end_to_end_pricing_runtime_s": profile_reporting["end_to_end_pricing_runtime_s"],
-                    "ncv_end_to_end_runtime_per_observation_s": profile_reporting["end_to_end_runtime_per_observation_s"],
-                    "runtime_projection_basis_n": "|".join(str(x) for x in snap["ncv_scaling"]["runtime_projection_basis_n"]),
-                    "runtime_projection_method": snap["ncv_scaling"]["runtime_projection_method"],
-                    "runtime_projection_is_empirical_or_projected": snap["ncv_scaling"]["runtime_projection_is_empirical_or_projected"],
-                    "runtime_projection_linearity_ratio": snap["ncv_scaling"]["runtime_projection_linearity_ratio"],
-                    "runtime_projection_is_sufficiently_linear": snap["ncv_scaling"]["runtime_projection_is_sufficiently_linear"],
-                    "torch_tensor_conversion_inside_pricing_timing": profile_reporting["torch_tensor_conversion_inside_pricing_timing"],
-                    "runtime_basis_n_small": snap["runtime_profiles"][0]["n_paths"],
-                    "runtime_basis_n_medium": snap["runtime_profiles"][1]["n_paths"],
-                    "runtime_basis_n_reporting": snap["runtime_profiles"][2]["n_paths"],
-                    "runtime_basis_runtime_s_small": snap["runtime_profiles"][0]["NCV"]["end_to_end_pricing_runtime_s"],
-                    "runtime_basis_runtime_s_medium": snap["runtime_profiles"][1]["NCV"]["end_to_end_pricing_runtime_s"],
-                    "runtime_basis_runtime_s_reporting": snap["runtime_profiles"][2]["NCV"]["end_to_end_pricing_runtime_s"],
+                    "path_and_payoff_runtime_s": ncv_reporting_projection["projected_runtime_s"],
+                    "control_evaluation_runtime_s": 0.0,
+                    "estimator_reduction_runtime_s": 0.0,
+                    "end_to_end_pricing_runtime_s": ncv_reporting_projection["projected_runtime_s"],
+                    "ncv_end_to_end_runtime_per_observation_s": ncv_reporting_projection["projected_per_observation_s"],
+                    "timing_path_counts": "|".join(str(x) for x in config.timing_path_counts),
+                    "timing_repeats": int(config.timing_repeats),
+                    "runtime_checkpoint_for_pricing_timing": selected_runtime_checkpoint,
+                    "runtime_projection_basis_n": "|".join(str(x) for x in ncv_reporting_projection["runtime_projection_basis_n"]),
+                    "runtime_projection_method": ncv_reporting_projection["runtime_projection_method"],
+                    "runtime_projection_is_empirical_or_projected": ncv_reporting_projection["runtime_projection_is_empirical_or_projected"],
+                    "runtime_projection_linearity_ratio": ncv_reporting_projection["runtime_projection_linearity_ratio"],
+                    "runtime_projection_is_sufficiently_linear": ncv_reporting_projection["runtime_projection_is_sufficiently_linear"],
+                    "runtime_at_required_n_is_empirical_or_projected": "projected",
+                    "torch_tensor_conversion_inside_pricing_timing": True,
                     **diag,
                 }
                 per_replication_rows.append(row)
@@ -1098,30 +1199,46 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                 per_checkpoint_costs = []
                 for r in validation_rows:
                     req_n = compute_required_paths(float(r["residual_variance"]), float(target_se))
-                    per_obs = float(r["ncv_end_to_end_runtime_per_observation_s"])
+                    runtime_req = project_runtime_at_n(
+                        ncv_runtime_profiles,
+                        "NCV",
+                        req_n,
+                    )
                     setup_cost = float(r["cumulative_training_runtime_s"])
-                    marginal_pricing = req_n * per_obs
+                    marginal_pricing = float(runtime_req["projected_runtime_s"])
                     total_cost = setup_cost + int(q) * marginal_pricing
-                    per_checkpoint_costs.append((r, req_n, setup_cost, marginal_pricing, total_cost))
+                    per_checkpoint_costs.append((r, req_n, setup_cost, marginal_pricing, total_cost, runtime_req))
                 best = min(per_checkpoint_costs, key=lambda x: x[4])
-                best_row, best_n, best_setup, best_marginal, best_cost = best
+                best_row, best_n, best_setup, best_marginal, best_cost, best_runtime_req = best
                 matched_test_row = next(rr for rr in test_rows if int(rr["checkpoint"]) == int(best_row["checkpoint"]))
 
                 test_required_n = compute_required_paths(float(matched_test_row["residual_variance"]), float(target_se))
-                test_per_obs = float(matched_test_row["ncv_end_to_end_runtime_per_observation_s"])
+                test_runtime_req = project_runtime_at_n(
+                    ncv_runtime_profiles,
+                    "NCV",
+                    test_required_n,
+                )
                 test_setup = float(matched_test_row["cumulative_training_runtime_s"])
-                test_marginal = test_required_n * test_per_obs
+                test_marginal = float(test_runtime_req["projected_runtime_s"])
                 test_total_cost = test_setup + int(q) * test_marginal
 
                 gcv_req = compute_required_paths(float(gcv_validation["gcv_residual_variance"]), float(target_se))
-                gcv_per_obs = float(gcv_validation["end_to_end_runtime_per_observation_s"])
+                gcv_runtime_req = project_runtime_at_n(
+                    baseline_runtime_profiles,
+                    "GCV",
+                    gcv_req,
+                )
                 gcv_setup = float(gcv_validation["gcv_pilot_runtime_s"])
-                gcv_marginal = gcv_req * gcv_per_obs
+                gcv_marginal = float(gcv_runtime_req["projected_runtime_s"])
                 gcv_cost = gcv_setup + int(q) * gcv_marginal
                 gcv_test_req = compute_required_paths(float(gcv_test["gcv_residual_variance"]), float(target_se))
-                gcv_test_per_obs = float(gcv_test["end_to_end_runtime_per_observation_s"])
+                gcv_test_runtime_req = project_runtime_at_n(
+                    baseline_runtime_profiles,
+                    "GCV",
+                    gcv_test_req,
+                )
                 gcv_test_setup = float(gcv_test["gcv_pilot_runtime_s"])
-                gcv_test_marginal = gcv_test_req * gcv_test_per_obs
+                gcv_test_marginal = float(gcv_test_runtime_req["projected_runtime_s"])
                 gcv_test_cost = gcv_test_setup + int(q) * gcv_test_marginal
                 optimal_rows.append(
                     {
@@ -1138,7 +1255,12 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                         "setup_reuse_assumption": "NCV training counted once then reused Q times",
                         "runtime_projection_basis_n": best_row["runtime_projection_basis_n"],
                         "runtime_projection_method": best_row["runtime_projection_method"],
-                        "runtime_projection_is_empirical_or_projected": best_row["runtime_projection_is_empirical_or_projected"],
+                        "runtime_projection_is_empirical_or_projected": best_runtime_req["runtime_projection_is_empirical_or_projected"],
+                        "runtime_at_required_n_is_empirical_or_projected": best_runtime_req["runtime_at_required_n_is_empirical_or_projected"],
+                        "runtime_projection_linearity_ratio": best_runtime_req["runtime_projection_linearity_ratio"],
+                        "runtime_projection_is_sufficiently_linear": best_runtime_req["runtime_projection_is_sufficiently_linear"],
+                        "timing_path_counts": "|".join(str(x) for x in config.timing_path_counts),
+                        "timing_repeats": int(config.timing_repeats),
                         "cumulative_training_runtime_s": best_setup,
                         "validation_residual_variance": float(best_row["residual_variance"]),
                         "test_residual_variance": float(matched_test_row["residual_variance"]),
@@ -1153,9 +1275,11 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                         "gcv_setup_reuse_assumption": "GCV pilot counted once and reused across Q for same target",
                         "gcv_required_pricing_observations": int(gcv_req),
                         "gcv_marginal_pricing_cost_s": float(gcv_marginal),
+                        "gcv_runtime_at_required_n_is_empirical_or_projected": gcv_runtime_req["runtime_at_required_n_is_empirical_or_projected"],
                         "gcv_projected_total_cost_validation": float(gcv_cost),
                         "gcv_required_pricing_observations_test": int(gcv_test_req),
                         "gcv_marginal_pricing_cost_test_s": float(gcv_test_marginal),
+                        "gcv_runtime_at_required_n_test_is_empirical_or_projected": gcv_test_runtime_req["runtime_at_required_n_is_empirical_or_projected"],
                         "gcv_projected_total_cost_test": float(gcv_test_cost),
                         "optimal_ncv_beats_gcv_validation": bool(best_cost < gcv_cost),
                         "optimal_ncv_beats_gcv_test": bool(test_total_cost < gcv_test_cost),
