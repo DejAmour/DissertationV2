@@ -40,6 +40,10 @@ def test_smoke_configuration_is_valid():
     assert cfg.validation_paths == 200
     assert cfg.test_paths == 500
     assert list(cfg.checkpoints) == [0, 2, 5, 10]
+    assert cfg.pilot_paths == 50
+    assert list(cfg.timing_path_counts) == [100, 500]
+    assert cfg.timing_repeats == 1
+    assert 50_000 not in cfg.timing_path_counts
 
 
 def test_checkpoint_grid_strict_and_zero_start():
@@ -53,6 +57,14 @@ def test_checkpoint_grid_strict_and_zero_start():
 def test_dissertation_configuration_uses_252_monitoring_dates():
     cfg = profile_config("dissertation", output_dir="/tmp/out", base_seed=1)
     assert cfg.monitoring_dates == 252
+    assert cfg.train_paths == 5_000
+    assert cfg.validation_paths == 10_000
+    assert cfg.test_paths == 50_000
+    assert cfg.replications == 10
+    assert list(cfg.checkpoints) == [0, 10, 25, 50, 100, 200, 500, 1000]
+    assert cfg.pilot_paths == 1_000
+    assert list(cfg.timing_path_counts) == [1_000, 5_000, 10_000]
+    assert cfg.timing_repeats == 3
 
 
 def test_training_validation_test_seeds_are_distinct():
@@ -137,6 +149,9 @@ def test_tiny_run_outputs_schema_and_checkpoint_properties(tmp_path, monkeypatch
         default_epochs=2,
         train_batch_size=8,
         runtime_repeats=2,
+        pilot_paths=10,
+        timing_path_counts=(8, 16),
+        timing_repeats=1,
         pricing_observations_for_reporting=200,
         q_values=(1, 10),
         se_targets=(0.001,),
@@ -252,3 +267,170 @@ def test_invalid_or_zero_residual_variance_handled_explicitly():
     out = compute_ncv_split_diagnostics(payoff, h, e_h=0.0)
     assert not math.isfinite(out["vrr_ncv_vs_mc"]) or out["vrr_ncv_vs_mc"] > 0
     assert compute_required_paths(out["residual_variance"], 0.001) == 2
+
+
+def test_gcv_pilot_not_repeated_inside_marginal_timing(monkeypatch):
+    from asian_options import ncv_training_curve as tc
+
+    cfg = tc._make_reference_cfg(monitoring_dates=4, n_paths=5, seed=11)
+    calls = {"pilot": 0}
+
+    def fake_fit(_cfg, n_pilot):
+        calls["pilot"] += 1
+        assert n_pilot == 7
+        return {"beta": 0.5, "eg": 1.0, "pilot_runtime_s": 0.25}
+
+    monkeypatch.setattr(tc, "_fit_gcv_pilot_once", fake_fit)
+    out = tc._timed_mc_av_gcv("GCV", cfg, n_pilot=7, repeats=3)
+    assert calls["pilot"] == 1
+    assert out["setup_runtime_s"] == 0.25
+
+    calls2 = {"pilot": 0}
+
+    def fail_fit(_cfg, _n_pilot):
+        calls2["pilot"] += 1
+        raise AssertionError("pilot should not be refit when fitted beta is supplied")
+
+    monkeypatch.setattr(tc, "_fit_gcv_pilot_once", fail_fit)
+    out2 = tc._timed_mc_av_gcv(
+        "GCV",
+        cfg,
+        n_pilot=7,
+        repeats=4,
+        gcv_pilot_fit={"beta": 0.5, "eg": 1.0, "pilot_runtime_s": 0.125},
+    )
+    assert calls2["pilot"] == 0
+    assert out2["setup_runtime_s"] == 0.125
+
+
+@pytest.mark.skipif(not _TORCH_AVAILABLE, reason="torch required")
+def test_runtime_timing_loops_are_bounded_and_not_checkpoint_or_q_driven(tmp_path, monkeypatch):
+    from asian_options import ncv_training_curve as tc
+
+    monkeypatch.setattr(
+        tc,
+        "_plot_summary_figure",
+        lambda output_dir, *args, **kwargs: (output_dir / "ncv_training_curve_summary.png").write_text("x", encoding="utf-8"),
+    )
+
+    timing_calls = {"baseline": 0, "ncv": 0}
+    build_network_calls = {"count": 0}
+    timed_path_counts = []
+    projected_ns = []
+
+    original_build_network = tc.build_network
+
+    def tracked_build_network(*args, **kwargs):
+        build_network_calls["count"] += 1
+        return original_build_network(*args, **kwargs)
+
+    def fake_build_runtime_profiles(**kwargs):
+        timing_calls["baseline"] += 1
+        counts = tuple(int(x) for x in kwargs["timing_path_counts"])
+        timed_path_counts.extend(counts)
+        rows = []
+        for method in kwargs["methods"]:
+            for n in counts:
+                rows.append(
+                    {
+                        "method": method,
+                        "n_paths": n,
+                        "end_to_end_pricing_runtime_s": n / 1000.0,
+                        "end_to_end_runtime_per_observation_s": 1 / 1000.0,
+                    }
+                )
+        return rows
+
+    def fake_measure_end_to_end_pricing_runtime_profile(**kwargs):
+        timing_calls["ncv"] += 1
+        n = int(kwargs["n_paths"])
+        timed_path_counts.append(n)
+        return {
+            "method": "NCV",
+            "n_paths": n,
+            "timing_repeats": 1,
+            "timing_path_counts": str(n),
+            "path_and_payoff_runtime_s": n / 1000.0,
+            "control_evaluation_runtime_s": 0.0,
+            "estimator_reduction_runtime_s": 0.0,
+            "end_to_end_pricing_runtime_s": n / 1000.0,
+            "torch_tensor_conversion_inside_pricing_timing": True,
+            "end_to_end_runtime_per_observation_s": 1 / 1000.0,
+        }
+
+    def fake_project_runtime_at_n(_profiles, _method, n_required):
+        projected_ns.append(int(n_required))
+        return {
+            "runtime_projection_basis_n": [4, 8],
+            "runtime_projection_method": "linear_per_observation_rate",
+            "runtime_projection_is_empirical_or_projected": "projected_from_empirical_multi_n",
+            "runtime_projection_linearity_ratio": 1.0,
+            "runtime_projection_is_sufficiently_linear": True,
+            "projected_runtime_s": int(n_required) / 1000.0,
+            "projected_per_observation_s": 1 / 1000.0,
+            "runtime_at_required_n_is_empirical_or_projected": "projected",
+        }
+
+    def fake_compute_ncv_split_diagnostics(*args, **kwargs):
+        return {
+            "arithmetic_payoff_mean": 1.0,
+            "network_output_mean": 1.0,
+            "analytical_eh": 1.0,
+            "payoff_variance": 1.0,
+            "network_output_variance": 1.0,
+            "payoff_network_covariance": 1.0,
+            "payoff_network_correlation": 0.5,
+            "residual_mean": 0.0,
+            "residual_variance": 1.0,
+            "ncv_price_estimate": 1.0,
+            "estimator_variance_at_reporting_n": 1.0,
+            "standard_error_at_reporting_n": 1.0,
+            "vrr_ncv_vs_mc": 2.0,
+            "residual_variance_shift_check": 1.0,
+            "residual_shift_delta": 0.0,
+        }
+
+    monkeypatch.setattr(tc, "build_runtime_profiles", fake_build_runtime_profiles)
+    monkeypatch.setattr(tc, "measure_end_to_end_pricing_runtime_profile", fake_measure_end_to_end_pricing_runtime_profile)
+    monkeypatch.setattr(tc, "project_runtime_at_n", fake_project_runtime_at_n)
+    monkeypatch.setattr(tc, "compute_ncv_split_diagnostics", fake_compute_ncv_split_diagnostics)
+    monkeypatch.setattr(tc, "build_network", tracked_build_network)
+
+    cfg = TrainingCurveConfig(
+        profile="smoke",
+        base_seed=9,
+        replications=1,
+        train_paths=16,
+        validation_paths=20,
+        test_paths=24,
+        monitoring_dates=12,
+        checkpoints=(0, 1, 2),
+        hidden_width=8,
+        learning_rate=1e-2,
+        default_epochs=2,
+        train_batch_size=8,
+        runtime_repeats=1,
+        pilot_paths=10,
+        timing_path_counts=(4, 8),
+        timing_repeats=1,
+        pricing_observations_for_reporting=200,
+        q_values=(1, 10, 1000),
+        se_targets=(0.001,),
+        output_dir=str(tmp_path),
+    )
+
+    out_dir = run_training_curve_experiment(cfg)
+    assert timing_calls["baseline"] == 1
+    assert timing_calls["ncv"] == len(cfg.timing_path_counts)
+    assert build_network_calls["count"] == 1
+    assert all(n in set(cfg.timing_path_counts) for n in timed_path_counts)
+    assert 50_000 not in timed_path_counts
+
+    with (out_dir / "training_curve_optimal_checkpoints.csv").open() as fh:
+        optimal_rows = list(csv.DictReader(fh))
+    assert optimal_rows
+    required_ns = [int(r["required_pricing_observations"]) for r in optimal_rows]
+    assert max(required_ns) > max(cfg.timing_path_counts)
+    assert any(n > max(cfg.timing_path_counts) for n in projected_ns)
+    assert all(int(r["Q"]) in (1, 10, 1000) for r in optimal_rows)
+    assert all(float(r["projected_total_cost_s"]) == float(r["setup_cost_s"]) + int(r["Q"]) * float(r["marginal_pricing_cost_s"]) for r in optimal_rows)

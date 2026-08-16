@@ -37,6 +37,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--default-epochs", type=int)
     p.add_argument("--train-batch-size", type=int)
     p.add_argument("--runtime-repeats", type=int)
+    p.add_argument("--pilot-paths", type=int)
+    p.add_argument("--timing-path-counts", type=str, help="Comma-separated bounded timing path counts")
+    p.add_argument("--timing-repeats", type=int)
     p.add_argument("--pricing-observations-for-reporting", type=int)
     p.add_argument("--q-values", type=str, help="Comma-separated Q values")
     return p
@@ -67,6 +70,12 @@ def _apply_overrides(base: TrainingCurveConfig, args: argparse.Namespace) -> Tra
         updates["train_batch_size"] = args.train_batch_size
     if args.runtime_repeats is not None:
         updates["runtime_repeats"] = args.runtime_repeats
+    if args.pilot_paths is not None:
+        updates["pilot_paths"] = args.pilot_paths
+    if args.timing_path_counts:
+        updates["timing_path_counts"] = tuple(int(x.strip()) for x in args.timing_path_counts.split(",") if x.strip())
+    if args.timing_repeats is not None:
+        updates["timing_repeats"] = args.timing_repeats
     if args.pricing_observations_for_reporting is not None:
         updates["pricing_observations_for_reporting"] = args.pricing_observations_for_reporting
     if args.q_values:
