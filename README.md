@@ -174,6 +174,11 @@ RNG + path simulation + payoff + control evaluation + estimator averaging),
 with one-time setup costs (NCV training, GCV pilot where reusable) counted once
 and marginal pricing costs multiplied by `Q`. Runtime projection metadata
 records basis sizes and whether values are empirical or projected.
+For NCV training-curve outputs, `ncv_setup_cost_s` is defined as
+`training_data_generation_runtime_s + optimizer_cumulative_training_runtime_s`
+for checkpoints above zero, and `0` at checkpoint zero; validation
+generation/evaluation runtime is explicitly labeled as research/tuning overhead
+excluded from operational setup cost.
 
 ### NCV output-rescaling note
 

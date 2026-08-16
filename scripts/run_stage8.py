@@ -187,15 +187,19 @@ def _run_ncv_scratch(
     from asian_options.payoffs import arithmetic_asian_call_payoff
     from asian_options.simulate_gbm import simulate_paths
 
-    t_train = time.perf_counter()
+    t_data = time.perf_counter()
     train_cfg = dataclasses.replace(contract_cfg_base, n_paths=n_training, seed=train_seed)
     train_paths = simulate_paths(train_cfg)
     train_payoffs = arithmetic_asian_call_payoff(train_paths, train_cfg)
     z_train = _extract_z_shocks(train_paths, train_cfg)
+    data_generation_runtime = time.perf_counter() - t_data
+
+    t_opt = time.perf_counter()
     dataset = {"X_train": z_train, "y_train": train_payoffs}
     network = build_network(train_cfg, hidden_width=32)
     train_network(network, dataset, train_cfg, n_epochs=STAGE8_FIXED_NCV_EPOCH)
-    train_runtime = time.perf_counter() - t_train
+    optimizer_runtime = time.perf_counter() - t_opt
+    train_runtime = data_generation_runtime + optimizer_runtime
 
     price_cfg = dataclasses.replace(contract_cfg_base, n_paths=n_pricing, seed=pricing_seed)
     result = ncv_estimator(network, price_cfg, n_training_paths=n_training)
@@ -214,6 +218,14 @@ def _run_ncv_scratch(
         "pilot_runtime_s": 0.0,
         "target_training_paths": n_training,
         "target_training_runtime_s": train_runtime,
+        "training_data_generation_runtime_s": data_generation_runtime,
+        "optimizer_cumulative_training_runtime_s": optimizer_runtime,
+        "validation_generation_and_evaluation_runtime_s": 0.0,
+        "ncv_setup_cost_s": train_runtime,
+        "setup_cost_excludes_validation_generation_and_evaluation_runtime": True,
+        "validation_generation_and_evaluation_runtime_cost_scope": (
+            "research_tuning_overhead_excluded_from_operational_setup_cost"
+        ),
         "shared_reference_training_paths": 0,
         "shared_reference_training_runtime_s": 0.0,
         "training_paths": n_training,
@@ -590,6 +602,7 @@ def run_replication(
                 "contract_id": row.get("contract_id"),
                 "method": row.get("method"),
                 "target_training_runtime_s": row.get("target_training_runtime_s", 0.0),
+                "ncv_setup_cost_s": row.get("ncv_setup_cost_s", row.get("target_training_runtime_s", 0.0)),
                 "pilot_runtime_s": row.get("pilot_runtime_s", 0.0),
                 "pricing_runtime_s": row.get("pricing_runtime_s", 0.0),
                 "marginal_runtime_s": row.get("marginal_runtime_s", 0.0),
@@ -1035,7 +1048,11 @@ def compute_matched_accuracy_results(
 
                 one_time_runtime = 0.0
                 if method == "NCV_SCRATCH":
-                    one_time_runtime = _safe_float(agg.get((cid, method), {}).get("target_training_runtime_s_median")) or 0.0
+                    one_time_runtime = (
+                        _safe_float(agg.get((cid, method), {}).get("ncv_setup_cost_s_median"))
+                        or _safe_float(agg.get((cid, method), {}).get("target_training_runtime_s_median"))
+                        or 0.0
+                    )
                 if method in TRANSFER_METHODS:
                     one_time_runtime = shared_train_runtime_median or 0.0
                 if method in ("GCV", "NCV_TRANSFER_BETA"):
@@ -1071,7 +1088,7 @@ def compute_matched_accuracy_results(
                         "runtime_projection_basis_n": int(_safe_float(agg.get((cid, method), {}).get("pricing_observations_mean")) or 0),
                         "runtime_projection_is_empirical_or_projected": "projected_from_empirical_single_n",
                         "setup_reuse_assumption": (
-                            "target NCV training counted once"
+                            "target NCV setup (training-data generation + optimizer runtime) counted once; validation/tuning evaluation excluded"
                             if method == "NCV_SCRATCH"
                             else (
                                 "shared reference NCV training counted once"
@@ -1088,6 +1105,7 @@ def compute_matched_accuracy_results(
                             projected_pricing_runtime_mean if projected_pricing_runtime_mean is not None else "NA"
                         ),
                         "setup_cost_s": one_time_runtime,
+                        "ncv_setup_cost_s": one_time_runtime if method.startswith("NCV") else "NA",
                         "marginal_pricing_cost_s": projected_pricing_runtime if projected_pricing_runtime is not None else "NA",
                         "projected_total_cost_s": standalone_runtime if standalone_runtime is not None else "NA",
                         "marginal_runtime_s": marginal_runtime if marginal_runtime is not None else "NA",
@@ -1393,8 +1411,12 @@ def compute_break_even_tables(
         gcv_mean = _safe_float(agg.get((cid, "GCV"), {}).get("marginal_runtime_s_mean"))
         scratch_marg = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("marginal_runtime_s_median"))
         scratch_marg_mean = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("marginal_runtime_s_mean"))
-        scratch_init = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("target_training_runtime_s_median"))
-        scratch_init_mean = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("target_training_runtime_s_mean"))
+        scratch_init = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("ncv_setup_cost_s_median"))
+        if scratch_init is None:
+            scratch_init = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("target_training_runtime_s_median"))
+        scratch_init_mean = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("ncv_setup_cost_s_mean"))
+        if scratch_init_mean is None:
+            scratch_init_mean = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("target_training_runtime_s_mean"))
         tb1_marg = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA1"), {}).get("marginal_runtime_s_median"))
         tb1_marg_mean = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA1"), {}).get("marginal_runtime_s_mean"))
         tb_marg = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA"), {}).get("marginal_runtime_s_median"))
@@ -1535,6 +1557,7 @@ def _runtime_summary(aggregate_rows: List[dict], shared_rows: List[dict], per_re
             continue
         for phase, field in (
             ("target_training", "target_training_runtime_s"),
+            ("ncv_setup", "ncv_setup_cost_s"),
             ("pilot", "pilot_runtime_s"),
             ("pricing", "pricing_runtime_s"),
             ("marginal", "marginal_runtime_s"),
@@ -1579,6 +1602,7 @@ def _runtime_summary(aggregate_rows: List[dict], shared_rows: List[dict], per_re
             ("pricing", "pricing_runtime_s"),
             ("pilot", "pilot_runtime_s"),
             ("target_training", "target_training_runtime_s"),
+            ("ncv_setup", "ncv_setup_cost_s"),
             ("marginal", "marginal_runtime_s"),
             ("standalone", "standalone_runtime_s"),
         ):

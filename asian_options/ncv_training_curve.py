@@ -259,6 +259,16 @@ def compute_total_cost(training_runtime: float, required_paths: int, per_obs_run
     return training_runtime + reuse_q * (required_paths * per_obs_runtime)
 
 
+def compute_ncv_setup_cost(
+    training_data_generation_runtime_s: float,
+    optimizer_cumulative_training_runtime_s: float,
+    checkpoint: int,
+) -> float:
+    if int(checkpoint) == 0:
+        return 0.0
+    return float(training_data_generation_runtime_s) + float(optimizer_cumulative_training_runtime_s)
+
+
 def compute_gcv_benchmark(validation_split: dict[str, np.ndarray], test_split: dict[str, np.ndarray], pilot_split: dict[str, np.ndarray], n_reporting: int = 50_000) -> list[dict[str, Any]]:
     t0 = time.perf_counter()
     pilot_x = pilot_split["payoff_arithmetic"]
@@ -688,8 +698,10 @@ def validate_numeric_content(
         "ncv_end_to_end_runtime_per_observation_s",
         "cumulative_training_runtime_s",
         "training_data_generation_runtime_s",
+        "optimizer_cumulative_training_runtime_s",
         "optimizer_training_runtime_s",
         "validation_generation_and_evaluation_runtime_s",
+        "ncv_setup_cost_s",
     )
     for row in per_replication_rows:
         rid = f"rep={row.get('replication')},cp={row.get('checkpoint')},split={row.get('split')}"
@@ -743,6 +755,8 @@ def build_handover_text(config: TrainingCurveConfig, facts: dict[str, Any]) -> s
             f"- Checkpoints: {list(config.checkpoints)}",
             "- Uses independent training, validation, and held-out test splits per replication.",
             "- Trains one continuous network per replication and snapshots checkpoints without re-initialization.",
+            "- NCV operational setup cost uses training-data generation + optimizer cumulative runtime for checkpoint > 0, and is 0 at checkpoint 0.",
+            "- Validation-generation/evaluation runtime is reported as research/tuning overhead and excluded from operational setup cost.",
             "",
             "## Output-rescaling note (no new estimator added)",
             "The existing transferred control coefficient beta already provides scalar output rescaling.",
@@ -834,7 +848,7 @@ def _plot_summary_figure(
                 n_req = compute_required_paths(float(r["residual_variance"]), target_se)
                 vals.append(
                     compute_total_cost(
-                        float(r["cumulative_training_runtime_s"]),
+                        float(r["ncv_setup_cost_s"]),
                         n_req,
                         float(r.get("ncv_end_to_end_runtime_per_observation_s", r["inference_runtime_per_observation_median_s"])),
                         q,
@@ -1009,7 +1023,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
             snapshots[epoch] = {
                 "epoch": epoch,
                 "network": net_snapshot,
-                "cumulative_training_runtime_s": cumulative_runtime_s,
+                "optimizer_cumulative_training_runtime_s": cumulative_runtime_s,
                 "train_loss": train_loss,
                 "validation_loss": val_loss,
                 "test_loss": test_loss,
@@ -1081,9 +1095,20 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
 
         for cp in checkpoints:
             snap = snapshots[cp]
-            cumulative = float(snap["cumulative_training_runtime_s"])
-            incremental = cumulative - previous_checkpoint_s
-            previous_checkpoint_s = cumulative
+            optimizer_cumulative = float(snap["optimizer_cumulative_training_runtime_s"])
+            if cp == 0 and abs(optimizer_cumulative) > 1e-12:
+                raise RuntimeError(
+                    "checkpoint 0 must have zero optimizer cumulative runtime; "
+                    f"got {optimizer_cumulative}"
+                )
+            incremental = optimizer_cumulative - previous_checkpoint_s
+            previous_checkpoint_s = optimizer_cumulative
+            cumulative_total = float(data_generation_runtime_s) + optimizer_cumulative
+            ncv_setup_cost = compute_ncv_setup_cost(
+                training_data_generation_runtime_s=float(data_generation_runtime_s),
+                optimizer_cumulative_training_runtime_s=optimizer_cumulative,
+                checkpoint=cp,
+            )
 
             for split_name, diag in (("validation", snap["val_diag"]), ("test", snap["test_diag"])):
                 row = {
@@ -1100,7 +1125,8 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                     "train_loss": snap["train_loss"],
                     "validation_loss": snap["validation_loss"],
                     "test_loss": snap["test_loss"],
-                    "cumulative_training_runtime_s": cumulative,
+                    "cumulative_training_runtime_s": cumulative_total,
+                    "cumulative_training_runtime_scope": "training_data_generation_plus_optimizer_cumulative",
                     "incremental_training_runtime_s": 0.0 if cp == 0 else incremental,
                     "objective_name": "MSE",
                     "objective_mean_loss": snap["validation_loss"] if split_name == "validation" else snap["test_loss"],
@@ -1114,8 +1140,14 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                     "evaluation_no_grad": eval_no_grad_used,
                     "epoch_zero_training_runtime_zero": snapshots[0]["epoch"] == 0,
                     "training_data_generation_runtime_s": data_generation_runtime_s,
+                    "optimizer_cumulative_training_runtime_s": optimizer_cumulative,
                     "optimizer_training_runtime_s": 0.0 if cp == 0 else incremental,
                     "validation_generation_and_evaluation_runtime_s": snap["validation_generation_and_evaluation_runtime_s"],
+                    "ncv_setup_cost_s": ncv_setup_cost,
+                    "setup_cost_excludes_validation_generation_and_evaluation_runtime": True,
+                    "validation_generation_and_evaluation_runtime_cost_scope": (
+                        "research_tuning_overhead_excluded_from_operational_setup_cost"
+                    ),
                     "path_and_payoff_runtime_s": ncv_reporting_projection["projected_runtime_s"],
                     "control_evaluation_runtime_s": 0.0,
                     "estimator_reduction_runtime_s": 0.0,
@@ -1212,7 +1244,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                 for r in validation_rows:
                     req_n = compute_required_paths(float(r["residual_variance"]), float(target_se))
                     runtime_req = _project_cached(ncv_runtime_projection_cache, ncv_runtime_profiles, "NCV", req_n)
-                    setup_cost = float(r["cumulative_training_runtime_s"])
+                    setup_cost = float(r["ncv_setup_cost_s"])
                     marginal_pricing = float(runtime_req["projected_runtime_s"])
                     total_cost = setup_cost + int(q) * marginal_pricing
                     per_checkpoint_costs.append((r, req_n, setup_cost, marginal_pricing, total_cost, runtime_req))
@@ -1222,7 +1254,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
 
                 test_required_n = compute_required_paths(float(matched_test_row["residual_variance"]), float(target_se))
                 test_runtime_req = _project_cached(ncv_runtime_projection_cache, ncv_runtime_profiles, "NCV", test_required_n)
-                test_setup = float(matched_test_row["cumulative_training_runtime_s"])
+                test_setup = float(matched_test_row["ncv_setup_cost_s"])
                 test_marginal = float(test_runtime_req["projected_runtime_s"])
                 test_total_cost = test_setup + int(q) * test_marginal
 
@@ -1248,7 +1280,10 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                         "ncv_epoch_source": "training_curve_validation_tuning",
                         "fixed_ncv_epoch_for_stage8": TRAINING_CURVE_SELECTED_NCV_EPOCH,
                         "setup_cost_s": best_setup,
-                        "setup_reuse_assumption": "NCV training counted once then reused Q times",
+                        "setup_reuse_assumption": (
+                            "NCV setup (training-data generation + optimizer runtime) counted once; "
+                            "validation/tuning evaluation runtime excluded from operational setup cost"
+                        ),
                         "runtime_projection_basis_n": best_row["runtime_projection_basis_n"],
                         "runtime_projection_method": best_row["runtime_projection_method"],
                         "runtime_projection_is_empirical_or_projected": best_runtime_req["runtime_projection_is_empirical_or_projected"],
@@ -1257,7 +1292,18 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                         "runtime_projection_is_sufficiently_linear": best_runtime_req["runtime_projection_is_sufficiently_linear"],
                         "timing_path_counts": "|".join(str(x) for x in config.timing_path_counts),
                         "timing_repeats": int(config.timing_repeats),
-                        "cumulative_training_runtime_s": best_setup,
+                        "ncv_setup_cost_s": best_setup,
+                        "cumulative_training_runtime_s": float(best_row["cumulative_training_runtime_s"]),
+                        "cumulative_training_runtime_scope": "training_data_generation_plus_optimizer_cumulative",
+                        "training_data_generation_runtime_s": float(best_row["training_data_generation_runtime_s"]),
+                        "optimizer_cumulative_training_runtime_s": float(best_row["optimizer_cumulative_training_runtime_s"]),
+                        "validation_generation_and_evaluation_runtime_s": float(
+                            best_row["validation_generation_and_evaluation_runtime_s"]
+                        ),
+                        "setup_cost_excludes_validation_generation_and_evaluation_runtime": True,
+                        "validation_generation_and_evaluation_runtime_cost_scope": (
+                            "research_tuning_overhead_excluded_from_operational_setup_cost"
+                        ),
                         "validation_residual_variance": float(best_row["residual_variance"]),
                         "test_residual_variance": float(matched_test_row["residual_variance"]),
                         "required_pricing_observations": int(best_n),
