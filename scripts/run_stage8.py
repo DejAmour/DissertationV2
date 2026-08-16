@@ -611,14 +611,10 @@ def _build_seed_manifest(base_seed: int, n_replications: int) -> List[dict]:
 
 
 def seed_namespaces_are_disjoint(base_seed: int, replication: int) -> bool:
+    from asian_options.ncv_training_curve import replication_seeds as training_curve_replication_seeds
+
     final_eval = set(_replication_seeds(base_seed, replication).values())
-    rep_offset = replication * 10_000
-    training_curve = {
-        base_seed + rep_offset + 1_000,
-        base_seed + rep_offset + 2_000,
-        base_seed + rep_offset + 3_000,
-        base_seed + rep_offset + 4_000,
-    }
+    training_curve = set(training_curve_replication_seeds(base_seed, replication).values())
     return final_eval.isdisjoint(training_curve)
 
 
@@ -1053,6 +1049,8 @@ def compute_matched_accuracy_results(
                 )
 
                 marginal_runtime = projected_pricing_runtime
+                # Matched-accuracy table is reported per single valuation (Q=1);
+                # multi-valuation amortisation is handled in break-even outputs.
                 q_value = 1
 
                 standalone_runtime = (one_time_runtime + q_value * marginal_runtime) if marginal_runtime is not None else None
@@ -1063,7 +1061,6 @@ def compute_matched_accuracy_results(
                         "method": method,
                         "cost_scope": "end_to_end",
                         "target_definition": target_definition,
-                        "target_standard_error": target_se if target_se is not None else "NA",
                         "target_se": target_se if target_se is not None else "NA",
                         "Q": q_value,
                         "required_pricing_observations": n_required if feasible else "NA",

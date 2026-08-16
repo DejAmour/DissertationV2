@@ -27,6 +27,7 @@ SEED_OFFSETS = {
     "test": 3_000,
     "gcv_pilot": 4_000,
 }
+TRAINING_CURVE_SELECTED_NCV_EPOCH = 25
 
 
 @dataclass(frozen=True)
@@ -285,10 +286,10 @@ def compute_gcv_benchmark(validation_split: dict[str, np.ndarray], test_split: d
                 "gcv_control_only_per_observation_runtime_s": pricing_runtime / max(1, x.size),
                 "gcv_per_observation_runtime_s": pricing_runtime / max(1, x.size),
                 "path_and_payoff_runtime_s": pricing_runtime,
-                "control_evaluation_runtime_s": pilot_runtime,
+                "control_evaluation_runtime_s": 0.0,
                 "estimator_reduction_runtime_s": 0.0,
-                "end_to_end_pricing_runtime_s": pilot_runtime + pricing_runtime,
-                "end_to_end_runtime_per_observation_s": (pilot_runtime + pricing_runtime) / max(1, x.size),
+                "end_to_end_pricing_runtime_s": pricing_runtime,
+                "end_to_end_runtime_per_observation_s": pricing_runtime / max(1, x.size),
                 "gcv_price_estimate": float(np.mean(corrected)),
                 "gcv_analytical_eg": float(eg),
             }
@@ -320,20 +321,21 @@ def _maybe_cuda_sync(torch_mod) -> None:
     cuda.synchronize()
 
 
-def _timed_mc_av_gcv(method: str, cfg: ModelConfig, n_pilot: int = 0) -> dict[str, float]:
+def _timed_mc_av_gcv(method: str, cfg: ModelConfig, n_pilot: int = 0, repeats: int = 1) -> dict[str, float]:
     times_path_and_payoff: list[float] = []
     times_control: list[float] = []
     times_reduce: list[float] = []
     times_end_to_end: list[float] = []
+    times_setup: list[float] = []
 
-    for _ in range(1):
-        t0 = time.perf_counter()
+    for _ in range(max(1, repeats)):
         if method == "MC":
             res = standard_monte_carlo(cfg)
             times_end_to_end.append(float(res.end_to_end_runtime_seconds))
             times_path_and_payoff.append(float(res.end_to_end_runtime_seconds))
             times_control.append(0.0)
             times_reduce.append(0.0)
+            times_setup.append(0.0)
             continue
         if method == "AV":
             res = antithetic_variates(cfg)
@@ -341,16 +343,16 @@ def _timed_mc_av_gcv(method: str, cfg: ModelConfig, n_pilot: int = 0) -> dict[st
             times_path_and_payoff.append(float(res.end_to_end_runtime_seconds))
             times_control.append(0.0)
             times_reduce.append(0.0)
+            times_setup.append(0.0)
             continue
         if method == "GCV":
             res = geometric_control_variate(cfg, n_pilot=n_pilot)
-            end_to_end = float(res.end_to_end_runtime_seconds)
-            control_eval = float(res.training_runtime_seconds)
-            reduction = max(0.0, end_to_end - control_eval - float(res.pricing_runtime_seconds))
+            end_to_end = float(res.pricing_runtime_seconds)
             times_end_to_end.append(end_to_end)
-            times_path_and_payoff.append(float(res.pricing_runtime_seconds))
-            times_control.append(control_eval)
-            times_reduce.append(reduction)
+            times_path_and_payoff.append(end_to_end)
+            times_control.append(0.0)
+            times_reduce.append(0.0)
+            times_setup.append(float(res.training_runtime_seconds))
             continue
         raise ValueError(f"Unsupported method: {method}")
 
@@ -358,11 +360,13 @@ def _timed_mc_av_gcv(method: str, cfg: ModelConfig, n_pilot: int = 0) -> dict[st
     path_payoff = statistics.median(times_path_and_payoff) if times_path_and_payoff else float("nan")
     control_eval = statistics.median(times_control) if times_control else float("nan")
     reduction = statistics.median(times_reduce) if times_reduce else float("nan")
+    setup = statistics.median(times_setup) if times_setup else float("nan")
     return {
         "path_and_payoff_runtime_s": float(path_payoff),
         "control_evaluation_runtime_s": float(control_eval),
         "estimator_reduction_runtime_s": float(reduction),
         "end_to_end_pricing_runtime_s": float(end_to_end),
+        "setup_runtime_s": float(setup),
     }
 
 
@@ -417,7 +421,7 @@ def measure_end_to_end_pricing_runtime_profile(
     cfg = _make_reference_cfg(monitoring_dates=monitoring_dates, n_paths=n_paths, seed=pricing_seed)
     out: dict[str, Any] = {}
     for method in ("MC", "AV", "GCV"):
-        timed = _timed_mc_av_gcv(method, cfg, n_pilot=n_pilot)
+        timed = _timed_mc_av_gcv(method, cfg, n_pilot=n_pilot, repeats=runtime_repeats)
         out[method] = {
             **timed,
             "end_to_end_runtime_per_observation_s": (
@@ -548,7 +552,7 @@ def validate_output_schema(output_dir: Path, *, include_report_in_presence_check
         "errors": errors,
         "warnings": warnings,
         "report_present_post_write": report_present_post_write,
-        "passed": len(errors) == 0 and all(exists.get(name, False) for name in required),
+        "passed": len(errors) == 0 and all(exists.get(name, False) for name in checked),
     }
 
 
@@ -787,7 +791,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
             n_paths=config.pricing_observations_for_reporting,
             seed=seeds["gcv_pilot"] + 991,
         )
-        gcv_runtime_reporting = _timed_mc_av_gcv("GCV", gcv_cfg_reporting, n_pilot=config.validation_paths)
+        gcv_runtime_reporting = _timed_mc_av_gcv("GCV", gcv_cfg_reporting, n_pilot=config.validation_paths, repeats=config.runtime_repeats)
         gcv_runtime_small = _timed_mc_av_gcv(
             "GCV",
             _make_reference_cfg(
@@ -796,6 +800,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                 seed=seeds["gcv_pilot"] + 997,
             ),
             n_pilot=config.validation_paths,
+            repeats=config.runtime_repeats,
         )
         gcv_runtime_medium = _timed_mc_av_gcv(
             "GCV",
@@ -805,6 +810,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                 seed=seeds["gcv_pilot"] + 1003,
             ),
             n_pilot=config.validation_paths,
+            repeats=config.runtime_repeats,
         )
         gcv_scaling = assess_runtime_scaling(
             [
@@ -826,6 +832,8 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                     "end_to_end_runtime_per_observation_s": (
                         gcv_runtime_reporting["end_to_end_pricing_runtime_s"] / max(1, config.pricing_observations_for_reporting)
                     ),
+                    "gcv_pilot_runtime_s_end_to_end": gcv_runtime_reporting["setup_runtime_s"],
+                    "gcv_pilot_runtime_s": gcv_runtime_reporting["setup_runtime_s"],
                     "runtime_projection_basis_n": "|".join(str(x) for x in gcv_scaling["runtime_projection_basis_n"]),
                     "runtime_projection_method": gcv_scaling["runtime_projection_method"],
                     "runtime_projection_is_empirical_or_projected": gcv_scaling["runtime_projection_is_empirical_or_projected"],
@@ -1000,7 +1008,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                     "evaluation_no_grad": eval_no_grad_used,
                     "epoch_zero_training_runtime_zero": snapshots[0]["epoch"] == 0,
                     "training_data_generation_runtime_s": data_generation_runtime_s,
-                    "optimizer_training_runtime_s": cumulative,
+                    "optimizer_training_runtime_s": 0.0 if cp == 0 else incremental,
                     "validation_generation_and_evaluation_runtime_s": snap["validation_generation_and_evaluation_runtime_s"],
                     "path_and_payoff_runtime_s": profile_reporting["path_and_payoff_runtime_s"],
                     "control_evaluation_runtime_s": profile_reporting["control_evaluation_runtime_s"],
@@ -1125,6 +1133,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
                         "Q": int(q),
                         "checkpoint": int(best_row["checkpoint"]),
                         "ncv_epoch_source": "training_curve_validation_tuning",
+                        "fixed_ncv_epoch_for_stage8": TRAINING_CURVE_SELECTED_NCV_EPOCH,
                         "setup_cost_s": best_setup,
                         "setup_reuse_assumption": "NCV training counted once then reused Q times",
                         "runtime_projection_basis_n": best_row["runtime_projection_basis_n"],
@@ -1190,7 +1199,7 @@ def run_training_curve_experiment(config: TrainingCurveConfig) -> Path:
         gcv_rows,
         target_se=float(config.se_targets[0]) if config.se_targets else 0.001,
         q_values=config.q_values,
-        fixed_checkpoint=25 if 25 in config.checkpoints else int(config.checkpoints[0]),
+        fixed_checkpoint=TRAINING_CURVE_SELECTED_NCV_EPOCH if TRAINING_CURVE_SELECTED_NCV_EPOCH in config.checkpoints else int(config.checkpoints[0]),
     )
 
     (out_dir / "TRAINING_CURVE_HANDOVER.md").write_text(build_handover_text(config, facts), encoding="utf-8")
