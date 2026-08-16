@@ -1071,7 +1071,7 @@ def validate_runtime_benchmarks(
             "GCV",
             gcv_req,
         )
-        gcv_basis = [n for n in gcv_runtime_req["runtime_projection_basis_n"]]
+        gcv_basis = _parse_basis_n(gcv_runtime_req["runtime_projection_basis_n"])
         gcv_label = row.get("gcv_runtime_at_required_n_is_empirical_or_projected")
         if gcv_req in set(gcv_basis):
             if gcv_label != "empirical":
