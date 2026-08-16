@@ -728,7 +728,10 @@ def _validate_component_runtime_fields(row: dict[str, Any], rid: str) -> list[st
         return errors
 
     if any(_is_na_marker(v) for v in values.values()):
-        errors.append(f"{rid}: NA component runtime requires explicit component_runtime_measurement_status")
+        errors.append(
+            f"{rid}: NA component runtime requires component_runtime_measurement_status "
+            f"of 'not_separately_measured' or 'measured_separately' (got {status!r})"
+        )
     else:
         errors.append(f"{rid}: missing or invalid component_runtime_measurement_status")
     return errors
