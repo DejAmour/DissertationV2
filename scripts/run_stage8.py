@@ -1600,8 +1600,8 @@ def _build_validation_report(
     failures: List[str] = []
     warnings: List[str] = []
 
-    expected, row_failures = _all_required_rows_present(per_rep_rows, n_replications)
-    if not expected:
+    success_ok, row_failures = _check_required_success(per_rep_rows, n_replications)
+    if not success_ok:
         failures.extend(row_failures)
 
     for cid in CONTRACT_IDS:
