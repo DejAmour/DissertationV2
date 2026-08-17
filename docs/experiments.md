@@ -106,6 +106,14 @@ Each run writes a timestamped folder `run_YYYYMMDDTHHMMSSffffffZ` under `--outpu
   `component_runtime_measurement_status=not_separately_measured`.
 - One-time costs are amortised once (`setup_cost_s`), pricing is multiplied by
   `Q` (`projected_total_cost_s = setup_cost_s + Q * marginal_pricing_cost_s`).
+- Stage 8 break-even costing uses disjoint runtime components: setup and
+  pricing-only marginal costs cannot share the same timing component.
+- Stage 8 equal-budget projected results are `amortised_q_reused_setup` outputs:
+  reusable setup paths are counted once, then pricing paths scale by `Q`.
+- Stage 8 validation includes non-fatal runtime-regime warnings when early/late
+  replication medians shift substantially.
+- Stage 8 reproducibility reporting includes both canonical stable-summary hash
+  and raw written CSV-byte SHA-256.
 - For NCV training-curve checkpoints, operational setup is
   `ncv_setup_cost_s = training_data_generation_runtime_s + optimizer_cumulative_training_runtime_s`
   for checkpoint > 0 and `0` for checkpoint = 0.

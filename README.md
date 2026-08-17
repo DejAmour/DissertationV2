@@ -146,6 +146,9 @@ python scripts/run_stage8.py --profile dissertation --output-dir experiment_runs
 python scripts/run_stage8.py --profile dissertation --output-dir experiment_runs --empirical-equal-budget
 ```
 
+Supported Stage 8 overrides (defaults preserved): `--monitoring-dates`,
+`--ncv-epoch`, `--ncv-epoch-source`, `--experiment-role`, `--output-dir`.
+
 Stage 8 fixes now use a fixed NCV checkpoint of **25 epochs** sourced from
 the auxiliary training-curve validation tuning study
 (`ncv_epoch_source=training_curve_validation_tuning`). Training still uses
@@ -190,6 +193,14 @@ otherwise they are recorded as `NA` with
 Legacy `gcv_pricing_runtime_s` / `gcv_per_observation_runtime_s` fields remain
 diagnostic control-only labels with
 `gcv_pricing_runtime_scope=legacy_control_only_diagnostic_not_used_for_costing`.
+Stage 8 equal-observation break-even costing uses mutually exclusive setup and
+pricing-only marginal runtime components (no setup/marginal double counting).
+Stage 8 equal-budget projections use amortised-`Q` setup reuse: reusable setup
+paths are counted once and pricing paths scale with `Q`.
+Validation emits non-fatal runtime-regime warnings when robust early/late
+replication medians differ materially.
+Stage 8 reproducibility output reports both canonical stable-summary hash and
+raw written CSV-byte hash.
 For NCV training-curve outputs, `ncv_setup_cost_s` is defined as
 `training_data_generation_runtime_s + optimizer_cumulative_training_runtime_s`
 for checkpoints above zero, and `0` at checkpoint zero; validation
@@ -208,6 +219,13 @@ interpreter:
 ```powershell
 .\.venv\Scripts\Activate.ps1
 python -c "import sys; print(sys.executable)"
+```
+
+Full Stage 8 (m=12, epoch=1000) joint monitoring-frequency/input-dimensionality
+sensitivity run:
+
+```powershell
+python .\scripts\run_stage8.py --profile dissertation --output-dir .\experiment_runs_m12 --monitoring-dates 12 --ncv-epoch 1000 --ncv-epoch-source training_curve_validation_tuning_m12 --experiment-role monitoring_frequency_and_input_dimension_sensitivity
 ```
 
 ### NCV output-rescaling note

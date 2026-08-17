@@ -15,7 +15,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -57,6 +57,7 @@ BASE_METHODS = ("MC", "AV", "GCV", "NCV_SCRATCH")
 TRANSFER_METHODS = ("NCV_TRANSFER_BETA1", "NCV_TRANSFER_BETA")
 STAGE8_FIXED_NCV_EPOCH = 25
 STAGE8_NCV_EPOCH_SOURCE = "training_curve_validation_tuning"
+STAGE8_EXPERIMENT_ROLE = "primary_stage8_final_evaluation"
 FINAL_EVALUATION_SEED_NAMESPACE_OFFSET = 10_000_000
 
 
@@ -167,6 +168,19 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
 
 
+def _ensure_unique_run_dir(base_dir: Path, stem: str) -> Path:
+    candidate = base_dir / stem
+    if not candidate.exists():
+        candidate.mkdir(parents=True, exist_ok=False)
+        return candidate
+    for idx in range(1, 10_000):
+        alt = base_dir / f"{stem}_{idx}"
+        if not alt.exists():
+            alt.mkdir(parents=True, exist_ok=False)
+            return alt
+    raise RuntimeError(f"unable to create unique output directory under {base_dir}")
+
+
 def _commit_hash() -> str:
     try:
         out = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True)
@@ -181,6 +195,8 @@ def _run_ncv_scratch(
     train_seed: int,
     pricing_seed: int,
     n_pricing: int,
+    ncv_epoch: int,
+    ncv_epoch_source: str,
 ) -> dict:
     from asian_options.frozen_transfer import _extract_z_shocks
     from asian_options.neural_cv import build_network, ncv_estimator, train_network
@@ -197,7 +213,7 @@ def _run_ncv_scratch(
     t_opt = time.perf_counter()
     dataset = {"X_train": z_train, "y_train": train_payoffs}
     network = build_network(train_cfg, hidden_width=32)
-    train_network(network, dataset, train_cfg, n_epochs=STAGE8_FIXED_NCV_EPOCH)
+    train_network(network, dataset, train_cfg, n_epochs=ncv_epoch)
     optimizer_runtime = time.perf_counter() - t_opt
     train_runtime = data_generation_runtime + optimizer_runtime
 
@@ -235,8 +251,8 @@ def _run_ncv_scratch(
         "pricing_runtime_s": pricing_runtime,
         "marginal_runtime_s": pricing_runtime,
         "standalone_runtime_s": train_runtime + pricing_runtime,
-        "ncv_epoch": STAGE8_FIXED_NCV_EPOCH,
-        "ncv_epoch_source": STAGE8_NCV_EPOCH_SOURCE,
+        "ncv_epoch": ncv_epoch,
+        "ncv_epoch_source": ncv_epoch_source,
         "hash_verified": "",
         "param_hash": "",
     }
@@ -253,7 +269,16 @@ def _expected_method_rows_per_replication() -> List[Tuple[str, str]]:
     return rows
 
 
-def _replication_base_row(base_seed: int, replication: int, contract_id: str, method: str) -> dict:
+def _replication_base_row(
+    base_seed: int,
+    replication: int,
+    contract_id: str,
+    method: str,
+    ncv_epoch: int,
+    ncv_epoch_source: str,
+    monitoring_dates: int,
+    experiment_role: str,
+) -> dict:
     K, sigma, T = CONTRACT_GRID[contract_id]
     return {
         "base_seed": base_seed,
@@ -263,9 +288,18 @@ def _replication_base_row(base_seed: int, replication: int, contract_id: str, me
         "sigma": sigma,
         "T": T,
         "method": method,
-        "ncv_epoch": STAGE8_FIXED_NCV_EPOCH if method.startswith("NCV") else "NA",
-        "ncv_epoch_source": STAGE8_NCV_EPOCH_SOURCE if method.startswith("NCV") else "NA",
+        "monitoring_dates": monitoring_dates,
+        "experiment_role": experiment_role,
+        "ncv_epoch": ncv_epoch if method.startswith("NCV") else "NA",
+        "ncv_epoch_source": ncv_epoch_source if method.startswith("NCV") else "NA",
     }
+
+
+def _make_stage8_contract_cfg(contract_id: str, n_paths: int, seed: int, monitoring_dates: int) -> ModelConfig:
+    cfg = make_contract_cfg(contract_id, n_paths=n_paths, seed=seed)
+    if cfg.m == monitoring_dates:
+        return cfg
+    return dataclasses.replace(cfg, m=monitoring_dates)
 
 
 def run_replication(
@@ -275,6 +309,10 @@ def run_replication(
     n_pilot: int,
     n_pricing: int,
     torch_available: bool,
+    monitoring_dates: int,
+    ncv_epoch: int,
+    ncv_epoch_source: str,
+    experiment_role: str,
 ) -> Tuple[List[dict], List[dict], List[dict], dict]:
     seeds = _replication_seeds(base_seed, replication)
 
@@ -302,12 +340,17 @@ def run_replication(
         try:
             from asian_options.frozen_transfer import compute_network_hash, train_reference_network
 
-            ref_cfg = make_contract_cfg(REFERENCE_ID, n_paths=n_pricing, seed=seeds["ref_train"])
+            ref_cfg = _make_stage8_contract_cfg(
+                REFERENCE_ID,
+                n_paths=n_pricing,
+                seed=seeds["ref_train"],
+                monitoring_dates=monitoring_dates,
+            )
             ref_network, e_h0, ref_hash, ref_train_runtime_s = train_reference_network(
                 ref_cfg,
                 n_training=n_training,
                 train_seed=seeds["ref_train"],
-                n_epochs=STAGE8_FIXED_NCV_EPOCH,
+                n_epochs=ncv_epoch,
             )
             shared_training_row.update(
                 {
@@ -323,7 +366,12 @@ def run_replication(
         shared_training_row["error"] = "torch_not_available"
 
     for contract_id in CONTRACT_IDS:
-        base_cfg = make_contract_cfg(contract_id, n_paths=n_pricing, seed=seeds[f"pricing_{contract_id}"])
+        base_cfg = _make_stage8_contract_cfg(
+            contract_id,
+            n_paths=n_pricing,
+            seed=seeds[f"pricing_{contract_id}"],
+            monitoring_dates=monitoring_dates,
+        )
         pricing_seed = seeds[f"pricing_{contract_id}"]
         pilot_seed = seeds[f"pilot_{contract_id}"]
         train_seed = seeds[f"target_train_{contract_id}"]
@@ -333,7 +381,16 @@ def run_replication(
             mc = standard_monte_carlo(dataclasses.replace(base_cfg, seed=pricing_seed))
             per_rep_rows.append(
                 {
-                    **_replication_base_row(base_seed, replication, contract_id, "MC"),
+                    **_replication_base_row(
+                        base_seed,
+                        replication,
+                        contract_id,
+                        "MC",
+                        ncv_epoch,
+                        ncv_epoch_source,
+                        monitoring_dates,
+                        experiment_role,
+                    ),
                     "price": mc.price,
                     "observation_variance": mc.observation_variance,
                     "estimator_variance": mc.estimator_variance,
@@ -361,14 +418,37 @@ def run_replication(
                 }
             )
         except Exception as exc:
-            per_rep_rows.append({**_replication_base_row(base_seed, replication, contract_id, "MC"), "error": str(exc)})
+            per_rep_rows.append(
+                {
+                    **_replication_base_row(
+                        base_seed,
+                        replication,
+                        contract_id,
+                        "MC",
+                        ncv_epoch,
+                        ncv_epoch_source,
+                        monitoring_dates,
+                        experiment_role,
+                    ),
+                    "error": str(exc),
+                }
+            )
 
         # AV
         try:
             av = antithetic_variates(dataclasses.replace(base_cfg, seed=pricing_seed))
             per_rep_rows.append(
                 {
-                    **_replication_base_row(base_seed, replication, contract_id, "AV"),
+                    **_replication_base_row(
+                        base_seed,
+                        replication,
+                        contract_id,
+                        "AV",
+                        ncv_epoch,
+                        ncv_epoch_source,
+                        monitoring_dates,
+                        experiment_role,
+                    ),
                     "price": av.price,
                     "observation_variance": av.observation_variance,
                     "estimator_variance": av.estimator_variance,
@@ -396,7 +476,21 @@ def run_replication(
                 }
             )
         except Exception as exc:
-            per_rep_rows.append({**_replication_base_row(base_seed, replication, contract_id, "AV"), "error": str(exc)})
+            per_rep_rows.append(
+                {
+                    **_replication_base_row(
+                        base_seed,
+                        replication,
+                        contract_id,
+                        "AV",
+                        ncv_epoch,
+                        ncv_epoch_source,
+                        monitoring_dates,
+                        experiment_role,
+                    ),
+                    "error": str(exc),
+                }
+            )
 
         # GCV
         try:
@@ -407,7 +501,16 @@ def run_replication(
             pricing_runtime = float(gcv.pricing_runtime_seconds)
             per_rep_rows.append(
                 {
-                    **_replication_base_row(base_seed, replication, contract_id, "GCV"),
+                    **_replication_base_row(
+                        base_seed,
+                        replication,
+                        contract_id,
+                        "GCV",
+                        ncv_epoch,
+                        ncv_epoch_source,
+                        monitoring_dates,
+                        experiment_role,
+                    ),
                     "price": gcv.price,
                     "observation_variance": gcv.observation_variance,
                     "estimator_variance": gcv.estimator_variance,
@@ -425,7 +528,7 @@ def run_replication(
                     "training_paths": 0,
                     "total_simulated_paths": gcv.total_simulated_paths,
                     "pricing_runtime_s": pricing_runtime,
-                    "marginal_runtime_s": pilot_runtime + pricing_runtime,
+                    "marginal_runtime_s": pricing_runtime,
                     "standalone_runtime_s": pilot_runtime + pricing_runtime,
                     "beta": gcv.beta_hat,
                     "corr_f_c0": gcv.corr_estimate,
@@ -435,7 +538,21 @@ def run_replication(
                 }
             )
         except Exception as exc:
-            per_rep_rows.append({**_replication_base_row(base_seed, replication, contract_id, "GCV"), "error": str(exc)})
+            per_rep_rows.append(
+                {
+                    **_replication_base_row(
+                        base_seed,
+                        replication,
+                        contract_id,
+                        "GCV",
+                        ncv_epoch,
+                        ncv_epoch_source,
+                        monitoring_dates,
+                        experiment_role,
+                    ),
+                    "error": str(exc),
+                }
+            )
 
         # Scratch NCV
         if torch_available:
@@ -446,14 +563,54 @@ def run_replication(
                     train_seed=train_seed,
                     pricing_seed=pricing_seed,
                     n_pricing=n_pricing,
+                    ncv_epoch=ncv_epoch,
+                    ncv_epoch_source=ncv_epoch_source,
                 )
-                per_rep_rows.append({**_replication_base_row(base_seed, replication, contract_id, "NCV_SCRATCH"), **scratch, "error": ""})
+                per_rep_rows.append(
+                    {
+                        **_replication_base_row(
+                            base_seed,
+                            replication,
+                            contract_id,
+                            "NCV_SCRATCH",
+                            ncv_epoch,
+                            ncv_epoch_source,
+                            monitoring_dates,
+                            experiment_role,
+                        ),
+                        **scratch,
+                        "error": "",
+                    }
+                )
             except Exception as exc:
-                per_rep_rows.append({**_replication_base_row(base_seed, replication, contract_id, "NCV_SCRATCH"), "error": str(exc)})
+                per_rep_rows.append(
+                    {
+                        **_replication_base_row(
+                            base_seed,
+                            replication,
+                            contract_id,
+                            "NCV_SCRATCH",
+                            ncv_epoch,
+                            ncv_epoch_source,
+                            monitoring_dates,
+                            experiment_role,
+                        ),
+                        "error": str(exc),
+                    }
+                )
         else:
             per_rep_rows.append(
                 {
-                    **_replication_base_row(base_seed, replication, contract_id, "NCV_SCRATCH"),
+                    **_replication_base_row(
+                        base_seed,
+                        replication,
+                        contract_id,
+                        "NCV_SCRATCH",
+                        ncv_epoch,
+                        ncv_epoch_source,
+                        monitoring_dates,
+                        experiment_role,
+                    ),
                     "error": "torch_not_available",
                 }
             )
@@ -478,7 +635,16 @@ def run_replication(
                 marginal = float(tb1.get("pricing_runtime_s", 0.0))
                 per_rep_rows.append(
                     {
-                        **_replication_base_row(base_seed, replication, contract_id, "NCV_TRANSFER_BETA1"),
+                        **_replication_base_row(
+                            base_seed,
+                            replication,
+                            contract_id,
+                            "NCV_TRANSFER_BETA1",
+                            ncv_epoch,
+                            ncv_epoch_source,
+                            monitoring_dates,
+                            experiment_role,
+                        ),
                         **tb1,
                         "pilot_paths": 0,
                         "pilot_runtime_s": 0.0,
@@ -495,16 +661,29 @@ def run_replication(
                 )
                 beta_rows.append(
                     {
-                        **_replication_base_row(base_seed, replication, contract_id, "NCV_TRANSFER_BETA1"),
+                        **_replication_base_row(
+                            base_seed,
+                            replication,
+                            contract_id,
+                            "NCV_TRANSFER_BETA1",
+                            ncv_epoch,
+                            ncv_epoch_source,
+                            monitoring_dates,
+                            experiment_role,
+                        ),
                         "estimated_beta": 1.0,
                         "payoff_control_correlation": tb1.get("corr_f_c0"),
                         "payoff_variance": tb1.get("payoff_variance"),
                         "control_variance": tb1.get("control_variance"),
                         "payoff_control_covariance": tb1.get("payoff_control_covariance"),
                         "optimal_residual_variance": tb1.get("optimal_residual_variance"),
-                        "observed_residual_variance": tb1.get("observation_variance"),
-                        "residual_variance_beta_one": tb1.get("observation_variance"),
-                        "variance_improvement_from_estimating_beta": 1.0,
+                        "optimal_residual_variance_status": tb1.get("optimal_residual_variance_status"),
+                        "observed_residual_variance": tb1.get("observed_residual_variance"),
+                        "residual_variance_beta_one": tb1.get("residual_variance_beta_one"),
+                        "variance_improvement_from_estimating_beta": tb1.get("variance_improvement_from_estimating_beta"),
+                        "variance_improvement_from_estimating_beta_definition": tb1.get(
+                            "variance_improvement_from_estimating_beta_definition"
+                        ),
                         "parameter_hash": tb1.get("param_hash"),
                         "hash_verification": tb1.get("hash_verified"),
                         "target_training_paths": 0,
@@ -516,15 +695,67 @@ def run_replication(
                 )
             except Exception as exc:
                 per_rep_rows.append(
-                    {**_replication_base_row(base_seed, replication, contract_id, "NCV_TRANSFER_BETA1"), "error": str(exc)}
+                    {
+                        **_replication_base_row(
+                            base_seed,
+                            replication,
+                            contract_id,
+                            "NCV_TRANSFER_BETA1",
+                            ncv_epoch,
+                            ncv_epoch_source,
+                            monitoring_dates,
+                            experiment_role,
+                        ),
+                        "error": str(exc),
+                    }
                 )
                 beta_rows.append(
-                    {**_replication_base_row(base_seed, replication, contract_id, "NCV_TRANSFER_BETA1"), "error": str(exc)}
+                    {
+                        **_replication_base_row(
+                            base_seed,
+                            replication,
+                            contract_id,
+                            "NCV_TRANSFER_BETA1",
+                            ncv_epoch,
+                            ncv_epoch_source,
+                            monitoring_dates,
+                            experiment_role,
+                        ),
+                        "error": str(exc),
+                    }
                 )
         else:
             reason = "torch_not_available" if not torch_available else "ref_network_failed"
-            per_rep_rows.append({**_replication_base_row(base_seed, replication, contract_id, "NCV_TRANSFER_BETA1"), "error": reason})
-            beta_rows.append({**_replication_base_row(base_seed, replication, contract_id, "NCV_TRANSFER_BETA1"), "error": reason})
+            per_rep_rows.append(
+                {
+                    **_replication_base_row(
+                        base_seed,
+                        replication,
+                        contract_id,
+                        "NCV_TRANSFER_BETA1",
+                        ncv_epoch,
+                        ncv_epoch_source,
+                        monitoring_dates,
+                        experiment_role,
+                    ),
+                    "error": reason,
+                }
+            )
+            beta_rows.append(
+                {
+                    **_replication_base_row(
+                        base_seed,
+                        replication,
+                        contract_id,
+                        "NCV_TRANSFER_BETA1",
+                        ncv_epoch,
+                        ncv_epoch_source,
+                        monitoring_dates,
+                        experiment_role,
+                    ),
+                    "error": reason,
+                }
+            )
 
         # Transfer beta estimated
         if torch_available and ref_network is not None and not shared_training_row.get("error"):
@@ -544,10 +775,19 @@ def run_replication(
                 )
                 pilot_runtime = float(tb.get("pilot_runtime_s", 0.0))
                 pricing_runtime = float(tb.get("pricing_runtime_s", 0.0))
-                marginal = pilot_runtime + pricing_runtime
+                marginal = pricing_runtime
                 per_rep_rows.append(
                     {
-                        **_replication_base_row(base_seed, replication, contract_id, "NCV_TRANSFER_BETA"),
+                        **_replication_base_row(
+                            base_seed,
+                            replication,
+                            contract_id,
+                            "NCV_TRANSFER_BETA",
+                            ncv_epoch,
+                            ncv_epoch_source,
+                            monitoring_dates,
+                            experiment_role,
+                        ),
                         **tb,
                         "target_training_paths": 0,
                         "target_training_runtime_s": 0.0,
@@ -555,22 +795,35 @@ def run_replication(
                         "shared_reference_training_runtime_s": ref_train_runtime_s,
                         "training_paths": 0,
                         "marginal_runtime_s": marginal,
-                        "standalone_runtime_s": ref_train_runtime_s + marginal,
+                        "standalone_runtime_s": ref_train_runtime_s + pilot_runtime + marginal,
                         "error": "",
                     }
                 )
                 beta_rows.append(
                     {
-                        **_replication_base_row(base_seed, replication, contract_id, "NCV_TRANSFER_BETA"),
+                        **_replication_base_row(
+                            base_seed,
+                            replication,
+                            contract_id,
+                            "NCV_TRANSFER_BETA",
+                            ncv_epoch,
+                            ncv_epoch_source,
+                            monitoring_dates,
+                            experiment_role,
+                        ),
                         "estimated_beta": tb.get("beta"),
                         "payoff_control_correlation": tb.get("corr_f_c0"),
                         "payoff_variance": tb.get("payoff_variance"),
                         "control_variance": tb.get("control_variance"),
                         "payoff_control_covariance": tb.get("payoff_control_covariance"),
                         "optimal_residual_variance": tb.get("optimal_residual_variance"),
-                        "observed_residual_variance": tb.get("observation_variance"),
+                        "optimal_residual_variance_status": tb.get("optimal_residual_variance_status"),
+                        "observed_residual_variance": tb.get("observed_residual_variance"),
                         "residual_variance_beta_one": tb.get("residual_variance_beta_one"),
                         "variance_improvement_from_estimating_beta": tb.get("variance_improvement_from_estimating_beta"),
+                        "variance_improvement_from_estimating_beta_definition": tb.get(
+                            "variance_improvement_from_estimating_beta_definition"
+                        ),
                         "parameter_hash": tb.get("param_hash"),
                         "hash_verification": tb.get("hash_verified"),
                         "target_training_paths": 0,
@@ -582,15 +835,67 @@ def run_replication(
                 )
             except Exception as exc:
                 per_rep_rows.append(
-                    {**_replication_base_row(base_seed, replication, contract_id, "NCV_TRANSFER_BETA"), "error": str(exc)}
+                    {
+                        **_replication_base_row(
+                            base_seed,
+                            replication,
+                            contract_id,
+                            "NCV_TRANSFER_BETA",
+                            ncv_epoch,
+                            ncv_epoch_source,
+                            monitoring_dates,
+                            experiment_role,
+                        ),
+                        "error": str(exc),
+                    }
                 )
                 beta_rows.append(
-                    {**_replication_base_row(base_seed, replication, contract_id, "NCV_TRANSFER_BETA"), "error": str(exc)}
+                    {
+                        **_replication_base_row(
+                            base_seed,
+                            replication,
+                            contract_id,
+                            "NCV_TRANSFER_BETA",
+                            ncv_epoch,
+                            ncv_epoch_source,
+                            monitoring_dates,
+                            experiment_role,
+                        ),
+                        "error": str(exc),
+                    }
                 )
         else:
             reason = "torch_not_available" if not torch_available else "ref_network_failed"
-            per_rep_rows.append({**_replication_base_row(base_seed, replication, contract_id, "NCV_TRANSFER_BETA"), "error": reason})
-            beta_rows.append({**_replication_base_row(base_seed, replication, contract_id, "NCV_TRANSFER_BETA"), "error": reason})
+            per_rep_rows.append(
+                {
+                    **_replication_base_row(
+                        base_seed,
+                        replication,
+                        contract_id,
+                        "NCV_TRANSFER_BETA",
+                        ncv_epoch,
+                        ncv_epoch_source,
+                        monitoring_dates,
+                        experiment_role,
+                    ),
+                    "error": reason,
+                }
+            )
+            beta_rows.append(
+                {
+                    **_replication_base_row(
+                        base_seed,
+                        replication,
+                        contract_id,
+                        "NCV_TRANSFER_BETA",
+                        ncv_epoch,
+                        ncv_epoch_source,
+                        monitoring_dates,
+                        experiment_role,
+                    ),
+                    "error": reason,
+                }
+            )
 
     for row in per_rep_rows:
         if row.get("error"):
@@ -631,14 +936,16 @@ def seed_namespaces_are_disjoint(base_seed: int, replication: int) -> bool:
     return final_eval.isdisjoint(training_curve)
 
 
-def compute_all_high_precision_references(n_paths: int, base_seed: int) -> List[dict]:
+def compute_all_high_precision_references(n_paths: int, base_seed: int, monitoring_dates: int) -> List[dict]:
     from asian_options.frozen_transfer import compute_high_precision_reference
 
     rows: List[dict] = []
     for i, cid in enumerate(CONTRACT_IDS):
         seed = base_seed + SEED_OFFSET_HIGH_PREC + i * 1000
         try:
-            rows.append(compute_high_precision_reference(cid, n_paths=n_paths, seed=seed))
+            row = compute_high_precision_reference(cid, n_paths=n_paths, seed=seed, monitoring_dates=monitoring_dates)
+            row["monitoring_dates"] = monitoring_dates
+            rows.append(row)
         except Exception as exc:
             rows.append(
                 {
@@ -650,6 +957,7 @@ def compute_all_high_precision_references(n_paths: int, base_seed: int) -> List[
                     "n_paths": n_paths,
                     "method": "GCV_high_precision",
                     "seed": seed,
+                    "monitoring_dates": monitoring_dates,
                     "error": str(exc),
                 }
             )
@@ -980,7 +1288,7 @@ def compute_equal_pricing_observations_summary(
                     "estimator_variance": r.get("mean_estimator_variance", "NA"),
                     "standard_error": r.get("mean_reported_estimator_standard_error", "NA"),
                     "pricing_runtime_s": r.get("pricing_runtime_s_median", r.get("pricing_runtime_s_mean", "NA")),
-                    "marginal_runtime_s": r.get("marginal_runtime_s_median", r.get("standalone_runtime_s_mean", "NA")),
+                    "marginal_runtime_s": r.get("pricing_runtime_s_median", r.get("pricing_runtime_s_mean", "NA")),
                     "standalone_runtime_s": r.get("standalone_runtime_s_median", r.get("standalone_runtime_s_mean", "NA")),
                     "vrr_against_mc": vrr.get((cid, method, "MC"), {}).get("arithmetic_mean", "NA"),
                     "vrr_against_gcv": vrr.get((cid, method, "GCV"), {}).get("arithmetic_mean", "NA"),
@@ -1006,6 +1314,33 @@ def _runtime_per_observation(rows: List[dict], contract_id: str, method: str) ->
             if rt is not None and obs is not None and obs > 0:
                 vals.append(rt / obs)
     return _median(vals), _mean(vals)
+
+
+def _runtime_components_for_method(method: str) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    if method in ("MC", "AV"):
+        return tuple(), ("pricing_runtime_s",)
+    if method == "GCV":
+        return ("pilot_runtime_s",), ("pricing_runtime_s",)
+    if method == "NCV_SCRATCH":
+        return ("ncv_setup_cost_s",), ("pricing_runtime_s",)
+    if method == "NCV_TRANSFER_BETA1":
+        return ("shared_reference_training_runtime_s",), ("pricing_runtime_s",)
+    if method == "NCV_TRANSFER_BETA":
+        return ("shared_reference_training_runtime_s", "pilot_runtime_s"), ("pricing_runtime_s",)
+    return tuple(), ("pricing_runtime_s",)
+
+
+def _validate_disjoint_runtime_components(
+    table_name: str,
+    row_identifier: str,
+    setup_components: Iterable[str],
+    marginal_components: Iterable[str],
+) -> None:
+    overlap = sorted(set(setup_components).intersection(marginal_components))
+    if overlap:
+        raise ValueError(
+            f"{table_name} row {row_identifier} has duplicated runtime components in setup and marginal costs: {overlap}"
+        )
 
 
 def compute_matched_accuracy_results(
@@ -1046,17 +1381,19 @@ def compute_matched_accuracy_results(
                 pilot_paths = n_pilot if method in ("GCV", "NCV_TRANSFER_BETA") else 0
                 shared_paths = n_training if method in TRANSFER_METHODS else 0
 
-                one_time_runtime = 0.0
-                if method == "NCV_SCRATCH":
-                    one_time_runtime = (
-                        _safe_float(agg.get((cid, method), {}).get("ncv_setup_cost_s_median"))
-                        or _safe_float(agg.get((cid, method), {}).get("target_training_runtime_s_median"))
-                        or 0.0
-                    )
-                if method in TRANSFER_METHODS:
-                    one_time_runtime = shared_train_runtime_median or 0.0
-                if method in ("GCV", "NCV_TRANSFER_BETA"):
-                    one_time_runtime += _safe_float(agg.get((cid, method), {}).get("pilot_runtime_s_median")) or 0.0
+                one_time_runtime = _safe_float(agg.get((cid, method), {}).get("setup_cost_s_median"))
+                if one_time_runtime is None:
+                    one_time_runtime = 0.0
+                    if method == "NCV_SCRATCH":
+                        one_time_runtime = (
+                            _safe_float(agg.get((cid, method), {}).get("ncv_setup_cost_s_median"))
+                            or _safe_float(agg.get((cid, method), {}).get("target_training_runtime_s_median"))
+                            or 0.0
+                        )
+                    if method in TRANSFER_METHODS:
+                        one_time_runtime = shared_train_runtime_median or 0.0
+                    if method in ("GCV", "NCV_TRANSFER_BETA"):
+                        one_time_runtime += _safe_float(agg.get((cid, method), {}).get("pilot_runtime_s_median")) or 0.0
 
                 projected_pricing_runtime = (
                     (rt_per_obs_median * n_required) if (feasible and rt_per_obs_median is not None) else None
@@ -1071,6 +1408,14 @@ def compute_matched_accuracy_results(
                 q_value = 1
 
                 standalone_runtime = (one_time_runtime + q_value * marginal_runtime) if marginal_runtime is not None else None
+                setup_components, marginal_components = _runtime_components_for_method(method)
+                row_id = f"{cid}:{method}:{target_definition}"
+                _validate_disjoint_runtime_components(
+                    "matched_accuracy_results",
+                    row_id,
+                    setup_components,
+                    marginal_components,
+                )
 
                 rows.append(
                     {
@@ -1106,7 +1451,9 @@ def compute_matched_accuracy_results(
                         ),
                         "setup_cost_s": one_time_runtime,
                         "ncv_setup_cost_s": one_time_runtime if method.startswith("NCV") else "NA",
+                        "setup_runtime_components": "|".join(setup_components) if setup_components else "none",
                         "marginal_pricing_cost_s": projected_pricing_runtime if projected_pricing_runtime is not None else "NA",
+                        "marginal_runtime_components": "|".join(marginal_components),
                         "projected_total_cost_s": standalone_runtime if standalone_runtime is not None else "NA",
                         "marginal_runtime_s": marginal_runtime if marginal_runtime is not None else "NA",
                         "one_time_runtime_s": one_time_runtime,
@@ -1120,109 +1467,90 @@ def compute_matched_accuracy_results(
 
 
 def _equal_budget_allocation(method: str, B: int, Q: int, n_training: int, n_pilot: int) -> dict:
+    if Q < 1:
+        return {
+            "pricing_observations": "NA",
+            "pricing_simulated_paths": "NA",
+            "training_paths": 0,
+            "pilot_paths": 0,
+            "shared_paths": 0,
+            "setup_paths_counted_once": "NA",
+            "paths_per_pricing_observation": "NA",
+            "total_paths_used": "NA",
+            "feasible": False,
+            "failure_reason": "invalid_q_must_be_at_least_one",
+        }
+
+    setup_paths_once = 0
+    paths_per_obs = 1
+    training_paths = 0
+    pilot_paths = 0
+    shared_paths = 0
+
     if method == "MC":
-        n = B
-        sim = n
-        total = Q * sim
+        pass
+    elif method == "AV":
+        paths_per_obs = 2
+    elif method == "GCV":
+        setup_paths_once = n_pilot
+        pilot_paths = n_pilot
+    elif method == "NCV_SCRATCH":
+        setup_paths_once = n_training
+        training_paths = n_training
+    elif method == "NCV_TRANSFER_BETA1":
+        setup_paths_once = n_training
+        shared_paths = n_training
+    elif method == "NCV_TRANSFER_BETA":
+        setup_paths_once = n_training + n_pilot
+        shared_paths = n_training
+        pilot_paths = n_pilot
+    else:
         return {
-            "pricing_observations": n,
-            "pricing_simulated_paths": sim,
+            "pricing_observations": "NA",
+            "pricing_simulated_paths": "NA",
             "training_paths": 0,
             "pilot_paths": 0,
             "shared_paths": 0,
-            "total_paths_used": total,
-            "feasible": n >= 2,
-            "failure_reason": "" if n >= 2 else "insufficient_budget_for_minimum_observations",
+            "setup_paths_counted_once": "NA",
+            "paths_per_pricing_observation": "NA",
+            "total_paths_used": "NA",
+            "feasible": False,
+            "failure_reason": "unknown_method",
         }
 
-    if method == "AV":
-        n = B // 2
-        sim = 2 * n
-        total = Q * sim
-        return {
-            "pricing_observations": n,
-            "pricing_simulated_paths": sim,
-            "training_paths": 0,
-            "pilot_paths": 0,
-            "shared_paths": 0,
-            "total_paths_used": total,
-            "feasible": n >= 2,
-            "failure_reason": "" if n >= 2 else "insufficient_budget_for_antithetic_pairs",
-        }
-
-    if method == "GCV":
-        n = B - n_pilot
-        sim = n
-        total = Q * (n_pilot + sim)
-        feasible = n >= 2
-        return {
-            "pricing_observations": n if feasible else "NA",
-            "pricing_simulated_paths": sim if feasible else "NA",
-            "training_paths": 0,
-            "pilot_paths": n_pilot,
-            "shared_paths": 0,
-            "total_paths_used": total,
-            "feasible": feasible,
-            "failure_reason": "" if feasible else "pilot_inside_budget_leaves_insufficient_pricing_paths",
-        }
-
-    if method == "NCV_SCRATCH":
-        n = math.floor((Q * B - n_training) / Q)
-        sim = n
-        total = n_training + Q * sim
-        feasible = n >= 2
-        return {
-            "pricing_observations": n if feasible else "NA",
-            "pricing_simulated_paths": sim if feasible else "NA",
-            "training_paths": n_training,
-            "pilot_paths": 0,
-            "shared_paths": 0,
-            "total_paths_used": total,
-            "feasible": feasible,
-            "failure_reason": "" if feasible else "training_cost_exceeds_budget",
-        }
-
-    if method == "NCV_TRANSFER_BETA1":
-        n = math.floor((Q * B - n_training) / Q)
-        sim = n
-        total = n_training + Q * sim
-        feasible = n >= 2
-        return {
-            "pricing_observations": n if feasible else "NA",
-            "pricing_simulated_paths": sim if feasible else "NA",
-            "training_paths": 0,
-            "pilot_paths": 0,
-            "shared_paths": n_training,
-            "total_paths_used": total,
-            "feasible": feasible,
-            "failure_reason": "" if feasible else "shared_reference_training_cost_exceeds_budget",
-        }
-
-    if method == "NCV_TRANSFER_BETA":
-        n = math.floor((Q * B - n_training - Q * n_pilot) / Q)
-        sim = n
-        total = n_training + Q * (n_pilot + sim)
-        feasible = n >= 2
-        return {
-            "pricing_observations": n if feasible else "NA",
-            "pricing_simulated_paths": sim if feasible else "NA",
-            "training_paths": 0,
-            "pilot_paths": n_pilot,
-            "shared_paths": n_training,
-            "total_paths_used": total,
-            "feasible": feasible,
-            "failure_reason": "" if feasible else "shared_training_plus_pilot_cost_exceeds_budget",
-        }
+    total_budget_paths = Q * B
+    available_for_pricing = total_budget_paths - setup_paths_once
+    if available_for_pricing < 0:
+        n = -1
+    else:
+        n = math.floor(available_for_pricing / (Q * paths_per_obs))
+    sim = n * paths_per_obs if n >= 0 else -1
+    total = setup_paths_once + (Q * sim if sim >= 0 else 0)
+    feasible = n >= 2
+    budget_ok = bool(feasible and total <= total_budget_paths)
+    if not feasible:
+        if available_for_pricing < 0:
+            reason = "one_time_setup_exceeds_total_budget"
+        elif method == "AV":
+            reason = "insufficient_budget_for_antithetic_pairs"
+        else:
+            reason = "insufficient_budget_for_minimum_observations"
+    elif not budget_ok:
+        reason = "budget_invariant_violation"
+    else:
+        reason = ""
 
     return {
-        "pricing_observations": "NA",
-        "pricing_simulated_paths": "NA",
-        "training_paths": 0,
-        "pilot_paths": 0,
-        "shared_paths": 0,
-        "total_paths_used": "NA",
-        "feasible": False,
-        "failure_reason": "unknown_method",
+        "pricing_observations": n if feasible else "NA",
+        "pricing_simulated_paths": sim if feasible else "NA",
+        "training_paths": training_paths,
+        "pilot_paths": pilot_paths,
+        "shared_paths": shared_paths,
+        "setup_paths_counted_once": setup_paths_once,
+        "paths_per_pricing_observation": paths_per_obs,
+        "total_paths_used": total if feasible else "NA",
+        "feasible": feasible and budget_ok,
+        "failure_reason": reason,
     }
 
 
@@ -1251,6 +1579,10 @@ def compute_equal_budget_projected_results(
                 rows.append(
                     {
                         "result_type": "projected",
+                        "projection_scope": "amortised_q_reused_setup",
+                        "setup_reuse_assumption": (
+                            "all reusable setup paths counted once over Q valuations; pricing paths scale with Q"
+                        ),
                         "contract_id": cid,
                         "method": method,
                         "Q": Q,
@@ -1481,29 +1813,48 @@ def compute_break_even_tables(
 
     equal_obs_rows: List[dict] = []
     for cid in TARGET_IDS:
-        gcv = _safe_float(agg.get((cid, "GCV"), {}).get("marginal_runtime_s_median"))
-        gcv_mean = _safe_float(agg.get((cid, "GCV"), {}).get("marginal_runtime_s_mean"))
-        gcv_setup = _safe_float(agg.get((cid, "GCV"), {}).get("pilot_runtime_s_median"))
-        gcv_setup_mean = _safe_float(agg.get((cid, "GCV"), {}).get("pilot_runtime_s_mean"))
-        scratch_marg = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("marginal_runtime_s_median"))
-        scratch_marg_mean = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("marginal_runtime_s_mean"))
-        scratch_init = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("ncv_setup_cost_s_median"))
+        gcv = _safe_float(agg.get((cid, "GCV"), {}).get("pricing_runtime_s_median"))
+        gcv_mean = _safe_float(agg.get((cid, "GCV"), {}).get("pricing_runtime_s_mean"))
+        gcv_setup = _safe_float(agg.get((cid, "GCV"), {}).get("setup_cost_s_median"))
+        gcv_setup_mean = _safe_float(agg.get((cid, "GCV"), {}).get("setup_cost_s_mean"))
+        scratch_marg = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("pricing_runtime_s_median"))
+        scratch_marg_mean = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("pricing_runtime_s_mean"))
+        scratch_init = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("setup_cost_s_median"))
         if scratch_init is None:
             scratch_init = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("target_training_runtime_s_median"))
-        scratch_init_mean = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("ncv_setup_cost_s_mean"))
+        scratch_init_mean = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("setup_cost_s_mean"))
         if scratch_init_mean is None:
             scratch_init_mean = _safe_float(agg.get((cid, "NCV_SCRATCH"), {}).get("target_training_runtime_s_mean"))
-        tb1_marg = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA1"), {}).get("marginal_runtime_s_median"))
-        tb1_marg_mean = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA1"), {}).get("marginal_runtime_s_mean"))
-        tb_marg = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA"), {}).get("marginal_runtime_s_median"))
-        tb_marg_mean = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA"), {}).get("marginal_runtime_s_mean"))
+        tb1_marg = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA1"), {}).get("pricing_runtime_s_median"))
+        tb1_marg_mean = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA1"), {}).get("pricing_runtime_s_mean"))
+        tb_marg = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA"), {}).get("pricing_runtime_s_median"))
+        tb_marg_mean = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA"), {}).get("pricing_runtime_s_mean"))
+        tb1_init = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA1"), {}).get("setup_cost_s_median"))
+        tb1_init_mean = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA1"), {}).get("setup_cost_s_mean"))
+        tb_init = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA"), {}).get("setup_cost_s_median"))
+        tb_init_mean = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA"), {}).get("setup_cost_s_mean"))
 
         comparisons = [
             ("NCV_SCRATCH", scratch_init, scratch_marg, scratch_init_mean, scratch_marg_mean),
-            ("NCV_TRANSFER_BETA1", shared_train_median, tb1_marg, shared_train_median, tb1_marg_mean),
-            ("NCV_TRANSFER_BETA", shared_train_median, tb_marg, shared_train_median, tb_marg_mean),
+            ("NCV_TRANSFER_BETA1", tb1_init if tb1_init is not None else shared_train_median, tb1_marg, tb1_init_mean if tb1_init_mean is not None else shared_train_median, tb1_marg_mean),
+            ("NCV_TRANSFER_BETA", tb_init if tb_init is not None else shared_train_median, tb_marg, tb_init_mean if tb_init_mean is not None else shared_train_median, tb_marg_mean),
         ]
         for method, init_c, marg, init_c_mean, marg_mean in comparisons:
+            baseline_setup_components, baseline_marginal_components = _runtime_components_for_method("GCV")
+            proposed_setup_components, proposed_marginal_components = _runtime_components_for_method(method)
+            row_id = f"{cid}:{method}:equal_obs"
+            _validate_disjoint_runtime_components(
+                "break_even_equal_observations",
+                f"{row_id}:baseline",
+                baseline_setup_components,
+                baseline_marginal_components,
+            )
+            _validate_disjoint_runtime_components(
+                "break_even_equal_observations",
+                f"{row_id}:proposed",
+                proposed_setup_components,
+                proposed_marginal_components,
+            )
             be = _solve_break_even(
                 init_c,
                 gcv,
@@ -1526,6 +1877,10 @@ def compute_break_even_tables(
                     "initial_cost_s": init_c,
                     "baseline_marginal_cost_s": gcv,
                     "proposed_marginal_cost_s": marg,
+                    "baseline_setup_runtime_components": "|".join(baseline_setup_components) if baseline_setup_components else "none",
+                    "baseline_marginal_runtime_components": "|".join(baseline_marginal_components),
+                    "proposed_setup_runtime_components": "|".join(proposed_setup_components) if proposed_setup_components else "none",
+                    "proposed_marginal_runtime_components": "|".join(proposed_marginal_components),
                     **be,
                     "break_even_q_mean_runtime_sensitivity": be_mean.get("break_even_q", "NA"),
                     "break_even_q_mean_runtime_sensitivity_reason": be_mean.get("failure_reason", ""),
@@ -1573,6 +1928,27 @@ def compute_break_even_tables(
             init_c = _safe_float(r.get("one_time_runtime_s"))
             baseline_mean = _safe_float(gcv_row.get("projected_pricing_runtime_s_mean_sensitivity"))
             proposed_mean = _safe_float(r.get("projected_pricing_runtime_s_mean_sensitivity"))
+            baseline_setup_components = tuple(str(gcv_row.get("setup_runtime_components", "none")).split("|"))
+            baseline_marginal_components = tuple(str(gcv_row.get("marginal_runtime_components", "")).split("|"))
+            proposed_setup_components = tuple(str(r.get("setup_runtime_components", "none")).split("|"))
+            proposed_marginal_components = tuple(str(r.get("marginal_runtime_components", "")).split("|"))
+            baseline_setup_components = tuple(x for x in baseline_setup_components if x and x != "none")
+            proposed_setup_components = tuple(x for x in proposed_setup_components if x and x != "none")
+            baseline_marginal_components = tuple(x for x in baseline_marginal_components if x)
+            proposed_marginal_components = tuple(x for x in proposed_marginal_components if x)
+            row_id = f"{cid}:{method}:{target_definition}"
+            _validate_disjoint_runtime_components(
+                "break_even_target",
+                f"{row_id}:baseline",
+                baseline_setup_components,
+                baseline_marginal_components,
+            )
+            _validate_disjoint_runtime_components(
+                "break_even_target",
+                f"{row_id}:proposed",
+                proposed_setup_components,
+                proposed_marginal_components,
+            )
             be = _solve_break_even(
                 init_c,
                 baseline,
@@ -1659,6 +2035,11 @@ def _runtime_summary(aggregate_rows: List[dict], shared_rows: List[dict], per_re
     for r in per_rep_rows:
         if r.get("error"):
             continue
+        setup_components, _ = _runtime_components_for_method(str(r.get("method", "")))
+        setup_cost = 0.0
+        for component in setup_components:
+            setup_cost += _safe_float(r.get(component)) or 0.0
+        grouped[(r["contract_id"], r["method"], "setup_cost")].append(setup_cost)
         for phase, field in (
             ("target_training", "target_training_runtime_s"),
             ("ncv_setup", "ncv_setup_cost_s"),
@@ -1703,6 +2084,7 @@ def _runtime_summary(aggregate_rows: List[dict], shared_rows: List[dict], per_re
         method = r["method"]
         rr = dict(r)
         for phase, col in (
+            ("setup_cost", "setup_cost_s"),
             ("pricing", "pricing_runtime_s"),
             ("pilot", "pilot_runtime_s"),
             ("target_training", "target_training_runtime_s"),
@@ -1719,11 +2101,83 @@ def _runtime_summary(aggregate_rows: List[dict], shared_rows: List[dict], per_re
     return summary_rows, agg_out
 
 
+def _detect_runtime_regime_warnings(
+    per_rep_rows: List[dict],
+    ratio_threshold: float = 2.0,
+    warmup_replications: int = 1,
+    min_window_observations: int = 3,
+) -> List[str]:
+    per_rep_aggregated = defaultdict(float)
+    for row in per_rep_rows:
+        if row.get("error"):
+            continue
+        rep = int(row.get("replication", -1))
+        method = str(row.get("method", ""))
+        for phase, field in (
+            ("pricing", "pricing_runtime_s"),
+            ("pilot", "pilot_runtime_s"),
+            ("target_training", "target_training_runtime_s"),
+            ("marginal", "marginal_runtime_s"),
+            ("standalone", "standalone_runtime_s"),
+        ):
+            v = _safe_float(row.get(field))
+            if v is not None:
+                per_rep_aggregated[(method, phase, rep)] += v
+
+    grouped = defaultdict(list)
+    for (method, phase, rep), total in per_rep_aggregated.items():
+        grouped[(method, phase)].append((rep, total))
+
+    warnings: List[str] = []
+    seen_keys: Set[Tuple[str, str, str]] = set()
+    for (method, phase), items in sorted(grouped.items()):
+        if len(items) < (warmup_replications + 2 * min_window_observations):
+            continue
+        items = sorted(items, key=lambda x: x[0])
+        core = items[warmup_replications:]
+        if len(core) < 2 * min_window_observations:
+            continue
+        split = len(core) // 2
+        early = core[:split]
+        late = core[split:]
+        if len(early) < min_window_observations or len(late) < min_window_observations:
+            continue
+        early_med = statistics.median([v for _, v in early])
+        late_med = statistics.median([v for _, v in late])
+        small = min(early_med, late_med)
+        large = max(early_med, late_med)
+        if small <= 0:
+            continue
+        ratio = large / small
+        if ratio < ratio_threshold:
+            continue
+        key = (method, phase, "stage8_runtime_profile")
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        warnings.append(
+            (
+                "runtime_regime_change_detected: "
+                f"method={method}, phase={phase}, ratio={ratio:.6f}, "
+                f"early_median_s={early_med:.6f}, late_median_s={late_med:.6f}, "
+                f"early_replications={early[0][0]}-{early[-1][0]}, "
+                f"late_replications={late[0][0]}-{late[-1][0]}, "
+                f"warmup_excluded_replications=0-{max(warmup_replications - 1, 0)}"
+            )
+        )
+    return warnings
+
+
 def _build_validation_report(
     per_rep_rows: List[dict],
     seed_manifest: List[dict],
     n_replications: int,
     base_seed: int,
+    monitoring_dates: int,
+    fixed_ncv_epoch: int,
+    ncv_epoch_source: str,
+    experiment_role: str,
+    runtime_regime_ratio_threshold: float = 2.0,
 ) -> dict:
     failures: List[str] = []
     warnings: List[str] = []
@@ -1733,7 +2187,7 @@ def _build_validation_report(
         failures.extend(row_failures)
 
     for cid in CONTRACT_IDS:
-        cfg = make_contract_cfg(cid, n_paths=10, seed=0)
+        cfg = _make_stage8_contract_cfg(cid, n_paths=10, seed=0, monitoring_dates=monitoring_dates)
         _, _, T = CONTRACT_GRID[cid]
         if abs(cfg.dt - (T / cfg.m)) > 1e-12:
             failures.append(f"dt mismatch for {cid}")
@@ -1754,10 +2208,14 @@ def _build_validation_report(
             if abs(ev - ov / po) > 1e-8 * max(1.0, abs(ov / po)):
                 failures.append(f"{rid}: estimator variance identity mismatch")
         if str(r.get("method", "")).startswith("NCV"):
-            if int(r.get("ncv_epoch", -1)) != STAGE8_FIXED_NCV_EPOCH:
-                failures.append(f"{rid}: ncv_epoch must be {STAGE8_FIXED_NCV_EPOCH}")
-            if r.get("ncv_epoch_source") != STAGE8_NCV_EPOCH_SOURCE:
+            if int(r.get("ncv_epoch", -1)) != fixed_ncv_epoch:
+                failures.append(f"{rid}: ncv_epoch must be {fixed_ncv_epoch}")
+            if r.get("ncv_epoch_source") != ncv_epoch_source:
                 failures.append(f"{rid}: ncv_epoch_source mismatch")
+        if int(r.get("monitoring_dates", -1)) != int(monitoring_dates):
+            failures.append(f"{rid}: monitoring_dates mismatch")
+        if str(r.get("experiment_role", "")) != experiment_role:
+            failures.append(f"{rid}: experiment_role mismatch")
 
     by_rep = defaultdict(list)
     for s in seed_manifest:
@@ -1769,6 +2227,12 @@ def _build_validation_report(
     for rep in range(n_replications):
         if not seed_namespaces_are_disjoint(base_seed, rep):
             failures.append(f"seed namespace overlap with training-curve streams in replication {rep}")
+    warnings.extend(
+        _detect_runtime_regime_warnings(
+            per_rep_rows=per_rep_rows,
+            ratio_threshold=runtime_regime_ratio_threshold,
+        )
+    )
 
     return {
         "passed": len(failures) == 0,
@@ -1776,6 +2240,13 @@ def _build_validation_report(
         "n_warnings": len(warnings),
         "failures": failures,
         "warnings": warnings,
+        "expected_metadata": {
+            "monitoring_dates": monitoring_dates,
+            "fixed_ncv_epoch": fixed_ncv_epoch,
+            "ncv_epoch_source": ncv_epoch_source,
+            "experiment_role": experiment_role,
+            "runtime_regime_ratio_threshold": runtime_regime_ratio_threshold,
+        },
     }
 
 
@@ -1845,12 +2316,55 @@ def _run_empirical_equal_budget(
     return rows
 
 
+STABLE_SUMMARY_COLUMNS = [
+    "contract_id",
+    "method",
+    "successful_replications",
+    "mean_price",
+    "mean_estimator_variance",
+    "mean_reported_estimator_standard_error",
+    "monitoring_dates",
+    "fixed_ncv_epoch",
+    "ncv_epoch_source",
+    "experiment_role",
+]
+
+
+def _canonical_scalar(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "nan"
+        if math.isinf(value):
+            return "inf" if value > 0 else "-inf"
+        return format(value, ".17g")
+    return str(value)
+
+
+def _stable_summary_canonical_bytes(rows: List[dict], columns: List[str]) -> bytes:
+    sorted_rows = sorted(rows, key=lambda r: (str(r.get("contract_id", "")), str(r.get("method", ""))))
+    lines = [",".join(columns)]
+    for row in sorted_rows:
+        vals = [_canonical_scalar(row.get(col, "")) for col in columns]
+        lines.append(",".join(vals))
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def run_stage8(
     profile: str,
     base_seed: int = 42,
     output_dir: str = "experiment_runs",
     n_replications_override: Optional[int] = None,
     empirical_equal_budget: bool = False,
+    monitoring_dates: Optional[int] = None,
+    ncv_epoch: Optional[int] = None,
+    ncv_epoch_source: Optional[str] = None,
+    experiment_role: str = STAGE8_EXPERIMENT_ROLE,
 ) -> Path:
     profile_cfg = PROFILES[profile]
     n_training = profile_cfg["n_training"]
@@ -1860,7 +2374,10 @@ def run_stage8(
     n_high_prec = profile_cfg["n_high_precision"]
     amortised_q_values = profile_cfg["amortised_q_values"]
 
-    monitoring_dates = make_contract_cfg(REFERENCE_ID, n_paths=2, seed=0).m
+    default_monitoring_dates = make_contract_cfg(REFERENCE_ID, n_paths=2, seed=0).m
+    effective_monitoring_dates = monitoring_dates if monitoring_dates is not None else default_monitoring_dates
+    effective_ncv_epoch = ncv_epoch if ncv_epoch is not None else STAGE8_FIXED_NCV_EPOCH
+    effective_ncv_epoch_source = ncv_epoch_source or STAGE8_NCV_EPOCH_SOURCE
 
     torch_available = _try_import_torch()
     if profile == "dissertation" and not torch_available:
@@ -1869,12 +2386,15 @@ def run_stage8(
     _warmup_numpy_and_torch(torch_available)
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_dir = Path(output_dir) / f"stage8_{profile}_{ts}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = _ensure_unique_run_dir(Path(output_dir), f"stage8_{profile}_{ts}")
 
     print(f"\n=== Stage 8: {profile_cfg['description']} ===")
     print(f"Output dir: {run_dir}")
-    print(f"Profile={profile}, base_seed={base_seed}, replications={n_replications}, torch_available={torch_available}")
+    print(
+        "Profile="
+        f"{profile}, base_seed={base_seed}, replications={n_replications}, torch_available={torch_available}, "
+        f"monitoring_dates={effective_monitoring_dates}, ncv_epoch={effective_ncv_epoch}"
+    )
 
     config_snapshot = {
         "profile": profile,
@@ -1886,9 +2406,16 @@ def run_stage8(
         "total_path_budget": n_pricing,
         "amortised_q_values": amortised_q_values,
         "n_high_precision": n_high_prec,
-        "monitoring_dates": monitoring_dates,
-        "fixed_ncv_epoch": STAGE8_FIXED_NCV_EPOCH,
-        "ncv_epoch_source": STAGE8_NCV_EPOCH_SOURCE,
+        "monitoring_dates": effective_monitoring_dates,
+        "fixed_ncv_epoch": effective_ncv_epoch,
+        "ncv_epoch_source": effective_ncv_epoch_source,
+        "experiment_role": experiment_role,
+        "sensitivity_scope_description": (
+            "joint monitoring-frequency/input-dimensionality sensitivity"
+            if effective_monitoring_dates != default_monitoring_dates
+            else "primary_stage8_default"
+        ),
+        "epoch_selection_policy": "fixed_offline_preselected_no_online_checkpoint_selection",
         "torch_available": torch_available,
         "contracts": {cid: {"K": K, "sigma": s, "T": T} for cid, (K, s, T) in CONTRACT_GRID.items()},
         "seed_offsets": {
@@ -1927,7 +2454,7 @@ def run_stage8(
     seed_manifest = _build_seed_manifest(base_seed, n_replications)
     _write_csv(run_dir / "seed_manifest.csv", seed_manifest)
 
-    high_prec_rows = compute_all_high_precision_references(n_high_prec, base_seed)
+    high_prec_rows = compute_all_high_precision_references(n_high_prec, base_seed, effective_monitoring_dates)
     _write_csv(run_dir / "high_precision_references.csv", high_prec_rows)
 
     all_per_rep: List[dict] = []
@@ -1944,6 +2471,10 @@ def run_stage8(
             n_pilot=n_pilot,
             n_pricing=n_pricing,
             torch_available=torch_available,
+            monitoring_dates=effective_monitoring_dates,
+            ncv_epoch=effective_ncv_epoch,
+            ncv_epoch_source=effective_ncv_epoch_source,
+            experiment_role=experiment_role,
         )
         all_per_rep.extend(per_rep)
         all_beta.extend(beta)
@@ -2049,7 +2580,16 @@ def run_stage8(
     )
     _write_csv(run_dir / "equal_budget_empirical_results.csv", empirical_rows)
 
-    validation_report = _build_validation_report(all_per_rep, seed_manifest, n_replications, base_seed)
+    validation_report = _build_validation_report(
+        all_per_rep,
+        seed_manifest,
+        n_replications,
+        base_seed,
+        monitoring_dates=effective_monitoring_dates,
+        fixed_ncv_epoch=effective_ncv_epoch,
+        ncv_epoch_source=effective_ncv_epoch_source,
+        experiment_role=experiment_role,
+    )
     _write_json(run_dir / "validation_report.json", validation_report)
 
     if profile == "dissertation":
@@ -2068,10 +2608,18 @@ def run_stage8(
             "mean_price": r["mean_price"],
             "mean_estimator_variance": r["mean_estimator_variance"],
             "mean_reported_estimator_standard_error": r["mean_reported_estimator_standard_error"],
+            "monitoring_dates": effective_monitoring_dates,
+            "fixed_ncv_epoch": effective_ncv_epoch,
+            "ncv_epoch_source": effective_ncv_epoch_source,
+            "experiment_role": experiment_role,
         }
         for r in aggregate_rows_with_runtime
     ]
-    _write_csv(run_dir / "summary_stable.csv", stable_rows)
+    summary_stable_path = run_dir / "summary_stable.csv"
+    _write_csv(summary_stable_path, stable_rows, fieldnames=STABLE_SUMMARY_COLUMNS)
+    canonical_bytes = _stable_summary_canonical_bytes(stable_rows, STABLE_SUMMARY_COLUMNS)
+    canonical_hash = hashlib.sha256(canonical_bytes).hexdigest()
+    file_hash = _sha256_file(summary_stable_path)
 
     repro_report = {
         "profile": profile,
@@ -2080,10 +2628,15 @@ def run_stage8(
         "n_rows_per_replication_results": len(all_per_rep),
         "n_rows_aggregate_results": len(aggregate_rows_with_runtime),
         "validation_passed": validation_report["passed"],
-        "stable_summary_sha256": hashlib.sha256(
-            json.dumps(stable_rows, sort_keys=True, default=str).encode()
-        ).hexdigest(),
-        "note": "Stable summary hash is available for comparison across a second identical run.",
+        "stable_summary_canonical_sha256": canonical_hash,
+        "stable_summary_file_sha256": file_hash,
+        "stable_summary_hash_canonicalization": (
+            "columns="
+            + ",".join(STABLE_SUMMARY_COLUMNS)
+            + "; row_order=contract_id_then_method; float_format=.17g; "
+            "line_endings=LF_for_canonical_data; file_hash=raw_written_csv_bytes"
+        ),
+        "note": "Compare canonical hash and file hash across a second identical run.",
         "second_identical_run_match_confirmed": False,
     }
     _write_json(run_dir / "reproducibility_report.json", repro_report)
@@ -2098,9 +2651,11 @@ def run_stage8(
 - profile: {profile}
 - base seed: {base_seed}
 - replications: {n_replications}
-- monitoring dates: {monitoring_dates}
-- fixed NCV epoch: {STAGE8_FIXED_NCV_EPOCH} ({STAGE8_NCV_EPOCH_SOURCE})
-- neural_cv.train_network default epoch count: 200 (generic function default; Stage 8 overrides to fixed {STAGE8_FIXED_NCV_EPOCH})
+- monitoring dates: {effective_monitoring_dates}
+- experiment role: {experiment_role}
+- sensitivity interpretation: {"joint monitoring-frequency/input-dimensionality sensitivity" if effective_monitoring_dates != default_monitoring_dates else "primary Stage 8 default configuration"}
+- fixed NCV epoch: {effective_ncv_epoch} ({effective_ncv_epoch_source})
+- neural_cv.train_network default epoch count: 200 (generic function default; Stage 8 overrides to fixed {effective_ncv_epoch})
 - Stage 8 uses fixed checkpoint from validation-based training-curve study; final test/pricing does not select epoch online
 - Torch: {torch_line}
 - failed-row count: {n_failed}
@@ -2126,6 +2681,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--base-seed", type=int, default=42, help="Base random seed")
     p.add_argument("--output-dir", default="experiment_runs", help="Base directory for timestamped output bundles")
     p.add_argument("--n-replications", type=int, default=None, help="Override profile default number of replications")
+    p.add_argument("--monitoring-dates", type=int, default=None, help="Override monitoring dates m (default 252).")
+    p.add_argument("--ncv-epoch", type=int, default=None, help="Override fixed Stage 8 NCV epoch.")
+    p.add_argument("--ncv-epoch-source", type=str, default=None, help="Override Stage 8 NCV epoch source label.")
+    p.add_argument(
+        "--experiment-role",
+        type=str,
+        default=STAGE8_EXPERIMENT_ROLE,
+        help="Experiment-role metadata label.",
+    )
     p.add_argument(
         "--empirical-equal-budget",
         action="store_true",
@@ -2142,4 +2706,8 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         n_replications_override=args.n_replications,
         empirical_equal_budget=args.empirical_equal_budget,
+        monitoring_dates=args.monitoring_dates,
+        ncv_epoch=args.ncv_epoch,
+        ncv_epoch_source=args.ncv_epoch_source,
+        experiment_role=args.experiment_role,
     )

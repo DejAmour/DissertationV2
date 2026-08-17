@@ -313,6 +313,12 @@ def ncv_transfer_beta1(
     payoff_var = float(np.var(payoffs, ddof=1))
     control_var = float(np.var(c0_vals, ddof=1))
     cov_fc0 = float(np.cov(payoffs, c0_vals, ddof=1)[0, 1])
+    if math.isfinite(control_var) and control_var > 0.0 and math.isfinite(cov_fc0):
+        optimal_residual_variance = payoff_var - (cov_fc0**2 / control_var)
+        optimal_residual_variance_status = "ok"
+    else:
+        optimal_residual_variance = float("nan")
+        optimal_residual_variance_status = "non_finite_or_non_positive_control_variance"
     f_std = float(np.std(payoffs, ddof=1))
     c0_std = float(np.std(c0_vals, ddof=1))
     if f_std > 0 and c0_std > 0:
@@ -344,7 +350,14 @@ def ncv_transfer_beta1(
         "payoff_variance": payoff_var,
         "control_variance": control_var,
         "payoff_control_covariance": cov_fc0,
-        "optimal_residual_variance": float(np.var(payoffs - c0_vals, ddof=1)),
+        "optimal_residual_variance": optimal_residual_variance,
+        "optimal_residual_variance_status": optimal_residual_variance_status,
+        "observed_residual_variance": obs_var,
+        "residual_variance_beta_one": obs_var,
+        "variance_improvement_from_estimating_beta": 1.0 if obs_var > 0 else float("nan"),
+        "variance_improvement_from_estimating_beta_definition": (
+            "residual_variance_beta_one / observed_residual_variance"
+        ),
         "e_h0": e_h0,
         "pricing_runtime_s": pricing_runtime_s,
         "training_runtime_s": training_runtime_s,
@@ -448,7 +461,6 @@ def ncv_transfer_beta(
     payoff_var = float(np.var(payoffs_pilot, ddof=1))
     cov_fc0 = float(np.cov(payoffs_pilot, c0_pilot, ddof=1)[0, 1])
     beta_hat = cov_fc0 / var_c0
-    optimal_residual_variance = payoff_var - (cov_fc0**2 / var_c0)
 
     pilot_runtime_s = time.perf_counter() - t_pilot_start
 
@@ -475,6 +487,15 @@ def ncv_transfer_beta(
     c0_price = h0_price - e_h0
     corrected = payoffs_price - beta_hat * c0_price
     beta1_residual = payoffs_price - c0_price
+    payoff_var_price = float(np.var(payoffs_price, ddof=1))
+    control_var_price = float(np.var(c0_price, ddof=1))
+    cov_fc0_price = float(np.cov(payoffs_price, c0_price, ddof=1)[0, 1])
+    if math.isfinite(control_var_price) and control_var_price > 0.0 and math.isfinite(cov_fc0_price):
+        optimal_residual_variance = payoff_var_price - (cov_fc0_price**2 / control_var_price)
+        optimal_residual_variance_status = "ok"
+    else:
+        optimal_residual_variance = float("nan")
+        optimal_residual_variance_status = "non_finite_or_non_positive_control_variance"
 
     pricing_runtime_s = time.perf_counter() - t_pricing_start
 
@@ -503,10 +524,11 @@ def ncv_transfer_beta(
         "total_simulated_paths": n_pilot + n_pricing,
         "beta": beta_hat,
         "var_c0_pilot": var_c0,
-        "payoff_variance": payoff_var,
-        "control_variance": var_c0,
-        "payoff_control_covariance": cov_fc0,
+        "payoff_variance": payoff_var_price,
+        "control_variance": control_var_price,
+        "payoff_control_covariance": cov_fc0_price,
         "optimal_residual_variance": optimal_residual_variance,
+        "optimal_residual_variance_status": optimal_residual_variance_status,
         "corr_f_c0": corr_f_c0,
         "e_h0": e_h0,
         "pricing_runtime_s": pricing_runtime_s,
@@ -515,9 +537,13 @@ def ncv_transfer_beta(
         "end_to_end_runtime_s": end_to_end_s,
         "param_hash": frozen_hash,
         "hash_verified": True,
+        "observed_residual_variance": obs_var,
         "residual_variance_beta_one": float(np.var(beta1_residual, ddof=1)),
         "variance_improvement_from_estimating_beta": (
             float(np.var(beta1_residual, ddof=1)) / obs_var if obs_var > 0 else float("nan")
+        ),
+        "variance_improvement_from_estimating_beta_definition": (
+            "residual_variance_beta_one / observed_residual_variance"
         ),
     }
 
@@ -530,6 +556,7 @@ def compute_high_precision_reference(
     contract_id: str,
     n_paths: int,
     seed: int,
+    monitoring_dates: int | None = None,
 ) -> dict:
     """
     Compute a high-precision GCV reference price for a contract.
@@ -553,10 +580,13 @@ def compute_high_precision_reference(
         Keys: contract_id, price, std_error, ci_lower, ci_upper, n_paths,
         method, seed.
     """
+    import dataclasses
     from asian_options.contracts import make_contract_cfg
     from asian_options.estimators import geometric_control_variate
 
     cfg = make_contract_cfg(contract_id, n_paths=n_paths, seed=seed)
+    if monitoring_dates is not None and cfg.m != monitoring_dates:
+        cfg = dataclasses.replace(cfg, m=monitoring_dates)
     result = geometric_control_variate(cfg, n_pilot=max(1000, n_paths // 50))
     return {
         "contract_id": contract_id,

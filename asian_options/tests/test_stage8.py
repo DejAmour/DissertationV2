@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import hashlib
 import json
 import math
 
@@ -37,6 +39,8 @@ def _base_success_row(rep: int, cid: str, method: str) -> dict:
         "beta": float("nan"),
         "corr_f_c0": float("nan"),
         "hash_verified": "",
+        "monitoring_dates": 252,
+        "experiment_role": s8.STAGE8_EXPERIMENT_ROLE,
         "ncv_epoch": 25 if method.startswith("NCV") else "NA",
         "ncv_epoch_source": "training_curve_validation_tuning" if method.startswith("NCV") else "NA",
         "error": "",
@@ -54,7 +58,7 @@ def _fixture_rows(n_replications: int = 1) -> list[dict]:
                 if method == "GCV":
                     row["pilot_paths"] = 10
                     row["pilot_runtime_s"] = 0.2
-                    row["marginal_runtime_s"] = 1.2
+                    row["marginal_runtime_s"] = 1.0
                     row["standalone_runtime_s"] = 1.2
                 if method == "NCV_SCRATCH":
                     row["target_training_paths"] = 50
@@ -82,7 +86,7 @@ def _fixture_rows(n_replications: int = 1) -> list[dict]:
             tb["target_training_runtime_s"] = 0.0
             tb["pilot_paths"] = 10
             tb["pilot_runtime_s"] = 0.2
-            tb["marginal_runtime_s"] = 1.2
+            tb["marginal_runtime_s"] = 1.0
             tb["standalone_runtime_s"] = 3.7
             tb["hash_verified"] = True
             rows.append(tb)
@@ -138,6 +142,10 @@ def test_reference_training_row_per_replication():
             n_pilot=2,
             n_pricing=5,
             torch_available=False,
+            monitoring_dates=252,
+            ncv_epoch=s8.STAGE8_FIXED_NCV_EPOCH,
+            ncv_epoch_source=s8.STAGE8_NCV_EPOCH_SOURCE,
+            experiment_role=s8.STAGE8_EXPERIMENT_ROLE,
         )
         shared.append(sr)
     assert len(shared) == 2
@@ -199,6 +207,22 @@ def test_every_equal_budget_row_respects_total_budget():
             assert r["total_paths_used"] <= r["total_budget_paths"]
 
 
+def test_equal_budget_path_formula_holds_for_all_methods_and_q():
+    rows = s8.compute_equal_budget_projected_results(
+        aggregate_rows=[],
+        n_training=5000,
+        n_pilot=1000,
+        budget=50000,
+        q_values=[1, 5, 10, 100],
+    )
+    for r in rows:
+        if not r.get("feasible"):
+            continue
+        lhs = r["setup_paths_counted_once"] + r["Q"] * r["pricing_simulated_paths"]
+        assert lhs == r["total_paths_used"]
+        assert lhs <= r["total_budget_paths"]
+
+
 def test_per_replication_vrr_before_aggregation_and_log_ci_finite():
     rows = _fixture_rows(3)
     per_rep, summary = s8.compute_variance_ratio_summary(rows)
@@ -224,7 +248,16 @@ def test_matched_accuracy_ceiling_formula():
 def test_stage8_fixed_epoch_and_source_constants():
     assert s8.STAGE8_FIXED_NCV_EPOCH == 25
     assert s8.STAGE8_NCV_EPOCH_SOURCE == "training_curve_validation_tuning"
-    row = s8._replication_base_row(42, 0, "reference", "NCV_SCRATCH")
+    row = s8._replication_base_row(
+        42,
+        0,
+        "reference",
+        "NCV_SCRATCH",
+        s8.STAGE8_FIXED_NCV_EPOCH,
+        s8.STAGE8_NCV_EPOCH_SOURCE,
+        252,
+        s8.STAGE8_EXPERIMENT_ROLE,
+    )
     assert row["ncv_epoch"] == 25
     assert row["ncv_epoch_source"] == "training_curve_validation_tuning"
 
@@ -422,7 +455,16 @@ def test_validation_report_fails_on_non_finite_runtime_or_variance(field):
     rows = _fixture_rows(1)
     rows[0][field] = float("nan")
     seeds = s8._build_seed_manifest(base_seed=42, n_replications=1)
-    report = s8._build_validation_report(rows, seeds, n_replications=1, base_seed=42)
+    report = s8._build_validation_report(
+        rows,
+        seeds,
+        n_replications=1,
+        base_seed=42,
+        monitoring_dates=252,
+        fixed_ncv_epoch=s8.STAGE8_FIXED_NCV_EPOCH,
+        ncv_epoch_source=s8.STAGE8_NCV_EPOCH_SOURCE,
+        experiment_role=s8.STAGE8_EXPERIMENT_ROLE,
+    )
     assert report["passed"] is False
     assert any(f"non-finite {field}" in x for x in report["failures"])
 
@@ -457,6 +499,7 @@ def test_break_even_changes_when_ncv_setup_cost_changes():
                     "method": "GCV",
                     "marginal_runtime_s_median": 10.0,
                     "pilot_runtime_s_median": 0.0,
+                    "setup_cost_s_median": 0.0,
                     "pricing_observations_mean": 100,
                     "pricing_runtime_s_median": 10.0,
                 },
@@ -466,6 +509,7 @@ def test_break_even_changes_when_ncv_setup_cost_changes():
                     "marginal_runtime_s_median": 5.0,
                     "target_training_runtime_s_median": 2.0,
                     "ncv_setup_cost_s_median": 2.0,
+                    "setup_cost_s_median": 2.0,
                     "pricing_observations_mean": 100,
                     "pricing_runtime_s_median": 5.0,
                 },
@@ -478,6 +522,7 @@ def test_break_even_changes_when_ncv_setup_cost_changes():
                     "method": "GCV",
                     "marginal_runtime_s_median": 10.0,
                     "pilot_runtime_s_median": 0.0,
+                    "setup_cost_s_median": 0.0,
                     "pricing_observations_mean": 100,
                     "pricing_runtime_s_median": 10.0,
                 },
@@ -487,6 +532,7 @@ def test_break_even_changes_when_ncv_setup_cost_changes():
                     "marginal_runtime_s_median": 5.0,
                     "target_training_runtime_s_median": 2.0,
                     "ncv_setup_cost_s_median": 20.0,
+                    "setup_cost_s_median": 20.0,
                     "pricing_observations_mean": 100,
                     "pricing_runtime_s_median": 5.0,
                 },
@@ -524,19 +570,37 @@ def test_break_even_uses_non_zero_gcv_setup_cost():
             "method": "GCV",
             "marginal_runtime_s_median": 10.0,
             "pilot_runtime_s_median": 3.0,
+            "pricing_runtime_s_median": 10.0,
+            "setup_cost_s_median": 3.0,
         },
         {
             "contract_id": TARGET_IDS[0],
             "method": "NCV_SCRATCH",
             "marginal_runtime_s_median": 5.0,
             "ncv_setup_cost_s_median": 20.0,
+            "pricing_runtime_s_median": 5.0,
+            "setup_cost_s_median": 20.0,
         },
     ]
     for cid in TARGET_IDS[1:]:
         aggregate.extend(
             [
-                {"contract_id": cid, "method": "GCV", "marginal_runtime_s_median": 10.0, "pilot_runtime_s_median": 3.0},
-                {"contract_id": cid, "method": "NCV_SCRATCH", "marginal_runtime_s_median": 5.0, "ncv_setup_cost_s_median": 20.0},
+                {
+                    "contract_id": cid,
+                    "method": "GCV",
+                    "marginal_runtime_s_median": 10.0,
+                    "pilot_runtime_s_median": 3.0,
+                    "pricing_runtime_s_median": 10.0,
+                    "setup_cost_s_median": 3.0,
+                },
+                {
+                    "contract_id": cid,
+                    "method": "NCV_SCRATCH",
+                    "marginal_runtime_s_median": 5.0,
+                    "ncv_setup_cost_s_median": 20.0,
+                    "pricing_runtime_s_median": 5.0,
+                    "setup_cost_s_median": 20.0,
+                },
             ]
         )
     rows, _, _, _ = s8.compute_break_even_tables(aggregate, [], [])
@@ -559,3 +623,142 @@ def test_empirical_equal_budget_flag_optional_and_off_by_default():
     parser = s8._build_parser()
     args = parser.parse_args([])
     assert args.empirical_equal_budget is False
+
+
+def test_equal_budget_gcv_pilot_counted_once_for_large_q():
+    alloc = s8._equal_budget_allocation("GCV", B=50_000, Q=1000, n_training=5000, n_pilot=1000)
+    assert alloc["pricing_observations"] == 49_999
+    assert alloc["setup_paths_counted_once"] == 1000
+    assert alloc["total_paths_used"] == 1000 + 1000 * 49_999
+
+
+def test_equal_budget_transfer_beta_pilot_counted_once_as_setup():
+    alloc = s8._equal_budget_allocation("NCV_TRANSFER_BETA", B=50_000, Q=10, n_training=5000, n_pilot=1000)
+    assert alloc["setup_paths_counted_once"] == 6000
+    assert alloc["pilot_paths"] == 1000
+    assert alloc["shared_paths"] == 5000
+    assert alloc["total_paths_used"] == 6000 + 10 * alloc["pricing_simulated_paths"]
+
+
+def test_equal_budget_projection_metadata_present():
+    rows = s8.compute_equal_budget_projected_results([], n_training=5000, n_pilot=1000, budget=50000, q_values=[10])
+    row = rows[0]
+    assert row["projection_scope"] == "amortised_q_reused_setup"
+    assert row["setup_reuse_assumption"]
+    assert "setup_paths_counted_once" in row
+
+
+def test_break_even_uses_pricing_runtime_not_legacy_gcv_marginal_field():
+    aggregate = []
+    for cid in TARGET_IDS:
+        aggregate.extend(
+            [
+                {
+                    "contract_id": cid,
+                    "method": "GCV",
+                    "marginal_runtime_s_median": 999.0,
+                    "pricing_runtime_s_median": 10.0,
+                    "setup_cost_s_median": 3.0,
+                },
+                {
+                    "contract_id": cid,
+                    "method": "NCV_SCRATCH",
+                    "marginal_runtime_s_median": 1.0,
+                    "pricing_runtime_s_median": 5.0,
+                    "setup_cost_s_median": 20.0,
+                },
+            ]
+        )
+    rows, _, _, _ = s8.compute_break_even_tables(aggregate, [], [])
+    row = next(r for r in rows if r["contract_id"] == TARGET_IDS[0] and r["method"] == "NCV_SCRATCH")
+    assert row["baseline_marginal_cost_s"] == 10.0
+
+
+def test_runtime_component_double_counting_validation_rejects_overlap():
+    with pytest.raises(ValueError, match="duplicated runtime components"):
+        s8._validate_disjoint_runtime_components(
+            "unit_test",
+            "row",
+            setup_components=("pricing_runtime_s",),
+            marginal_components=("pricing_runtime_s",),
+        )
+
+
+def test_runtime_regime_warning_detection_stable_has_no_warning():
+    rows = []
+    for rep in range(8):
+        rows.append({**_base_success_row(rep, "reference", "MC"), "pricing_runtime_s": 1.0})
+    warnings = s8._detect_runtime_regime_warnings(rows, ratio_threshold=2.0, warmup_replications=1, min_window_observations=3)
+    assert warnings == []
+
+
+def test_runtime_regime_warning_detection_two_regime_is_deduplicated():
+    rows = []
+    for rep in range(10):
+        rt = 1.0 if rep < 5 else 3.5
+        rows.append({**_base_success_row(rep, "reference", "MC"), "pricing_runtime_s": rt})
+    warnings = s8._detect_runtime_regime_warnings(rows, ratio_threshold=2.0, warmup_replications=1, min_window_observations=3)
+    assert len(warnings) == 1
+    assert "runtime_regime_change_detected" in warnings[0]
+
+
+def test_runtime_regime_warning_warmup_outlier_not_persistent():
+    rows = []
+    for rep in range(8):
+        rt = 20.0 if rep == 0 else 1.0
+        rows.append({**_base_success_row(rep, "reference", "MC"), "pricing_runtime_s": rt})
+    warnings = s8._detect_runtime_regime_warnings(rows, ratio_threshold=2.0, warmup_replications=1, min_window_observations=3)
+    assert warnings == []
+
+
+def test_runtime_regime_warning_insufficient_observations():
+    rows = []
+    for rep in range(4):
+        rows.append({**_base_success_row(rep, "reference", "MC"), "pricing_runtime_s": 1.0 + rep})
+    warnings = s8._detect_runtime_regime_warnings(rows, ratio_threshold=2.0, warmup_replications=1, min_window_observations=3)
+    assert warnings == []
+
+
+def test_reproducibility_report_file_hash_matches_written_csv(tmp_path):
+    run_dir = s8.run_stage8(profile="smoke", base_seed=17, output_dir=str(tmp_path), n_replications_override=1)
+    repro = json.loads((run_dir / "reproducibility_report.json").read_text())
+    expected = hashlib.sha256((run_dir / "summary_stable.csv").read_bytes()).hexdigest()
+    assert repro["stable_summary_file_sha256"] == expected
+    assert repro["stable_summary_canonical_sha256"]
+
+
+def test_stage8_default_metadata_in_outputs(tmp_path):
+    run_dir = s8.run_stage8(profile="smoke", base_seed=19, output_dir=str(tmp_path), n_replications_override=1)
+    cfg = json.loads((run_dir / "config_snapshot.json").read_text())
+    val = json.loads((run_dir / "validation_report.json").read_text())
+    assert cfg["monitoring_dates"] == 252
+    assert cfg["fixed_ncv_epoch"] == 25
+    assert cfg["ncv_epoch_source"] == "training_curve_validation_tuning"
+    assert val["expected_metadata"]["monitoring_dates"] == 252
+
+
+def test_stage8_m12_override_metadata_consistency(tmp_path):
+    role = "monitoring_frequency_and_input_dimension_sensitivity"
+    run_dir = s8.run_stage8(
+        profile="smoke",
+        base_seed=23,
+        output_dir=str(tmp_path),
+        n_replications_override=1,
+        monitoring_dates=12,
+        ncv_epoch=1000,
+        ncv_epoch_source="training_curve_validation_tuning_m12",
+        experiment_role=role,
+    )
+    cfg = json.loads((run_dir / "config_snapshot.json").read_text())
+    val = json.loads((run_dir / "validation_report.json").read_text())
+    with (run_dir / "summary_stable.csv").open() as fh:
+        stable_rows = list(csv.DictReader(fh))
+    handover = (run_dir / "handover.md").read_text()
+    assert cfg["monitoring_dates"] == 12
+    assert cfg["fixed_ncv_epoch"] == 1000
+    assert cfg["ncv_epoch_source"] == "training_curve_validation_tuning_m12"
+    assert cfg["experiment_role"] == role
+    assert val["expected_metadata"]["fixed_ncv_epoch"] == 1000
+    assert stable_rows and all(int(r["monitoring_dates"]) == 12 for r in stable_rows)
+    assert all(int(r["fixed_ncv_epoch"]) == 1000 for r in stable_rows)
+    assert role in handover
