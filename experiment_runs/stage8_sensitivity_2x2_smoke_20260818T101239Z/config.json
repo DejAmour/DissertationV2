@@ -1,0 +1,57 @@
+{
+  "profile": "smoke",
+  "base_seed": 42,
+  "replications": 2,
+  "train_paths": 64,
+  "validation_paths": 128,
+  "pilot_paths": 64,
+  "pricing_paths": 512,
+  "hidden_width": 32,
+  "learning_rate": 0.01,
+  "batch_size": 64,
+  "checkpoints": [
+    0,
+    10,
+    25,
+    1000
+  ],
+  "output_dir": "experiment_runs",
+  "direct_timing_max_paths": 2000,
+  "direct_timing_repeats": 1,
+  "contract": {
+    "S0": 100.0,
+    "K": 100.0,
+    "r": 0.05,
+    "sigma": 0.2,
+    "T": 1.0
+  },
+  "formal_design_cells": [
+    {
+      "monitoring_dates": 12,
+      "ncv_epoch": 25
+    },
+    {
+      "monitoring_dates": 12,
+      "ncv_epoch": 1000
+    },
+    {
+      "monitoring_dates": 252,
+      "ncv_epoch": 25
+    },
+    {
+      "monitoring_dates": 252,
+      "ncv_epoch": 1000
+    }
+  ],
+  "fixed_architecture": "one_hidden_layer_relu_linear_output",
+  "initialisation": "xavier_uniform_zero_biases",
+  "optimizer": "adam",
+  "seed_offsets": {
+    "train": 1000,
+    "validation": 2000,
+    "pilot": 3000,
+    "pricing": 4000,
+    "runtime": 5000
+  },
+  "created_at_utc": "20260818T101239Z"
+}

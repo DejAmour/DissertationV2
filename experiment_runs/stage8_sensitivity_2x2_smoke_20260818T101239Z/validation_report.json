@@ -1,0 +1,54 @@
+{
+  "passed": true,
+  "errors": [],
+  "warnings": [],
+  "formal_design_cells": [
+    [
+      12,
+      25
+    ],
+    [
+      12,
+      1000
+    ],
+    [
+      252,
+      25
+    ],
+    [
+      252,
+      1000
+    ]
+  ],
+  "observed_design_cells": [
+    [
+      12,
+      25
+    ],
+    [
+      12,
+      1000
+    ],
+    [
+      252,
+      25
+    ],
+    [
+      252,
+      1000
+    ]
+  ],
+  "checkpoint_grid": [
+    0,
+    10,
+    25,
+    1000
+  ],
+  "formal_epochs": [
+    25,
+    1000
+  ],
+  "replications": 2,
+  "seed_streams_independent_within_replication": true,
+  "pricing_sample_size": 512
+}
