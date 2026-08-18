@@ -1,0 +1,16 @@
+{
+  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "python_version": "3.12.3",
+  "python_executable": "/usr/bin/python",
+  "virtual_environment_active": false,
+  "virtual_environment_path": "NA",
+  "numpy_version": "2.5.2",
+  "scipy_version": "1.18.0",
+  "torch_version": "2.13.0",
+  "pytest_version": "9.1.1",
+  "matplotlib_version": "3.10.7",
+  "torch_available": true,
+  "cuda_available": false,
+  "torch_deterministic_enabled": true,
+  "torch_deterministic_warn_only": true
+}

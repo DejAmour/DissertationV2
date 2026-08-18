@@ -228,7 +228,8 @@ def log_ratio_summary(values: list[float]) -> dict[str, Any]:
     }
 
 
-def _paired_log_contrast(rows: list[dict[str, Any]], monitoring_dates: int) -> list[float]:
+def _paired_log_contrast_by_rep(rows: list[dict[str, Any]], monitoring_dates: int) -> dict[int, float]:
+    epoch_lo, epoch_hi = FORMAL_EPOCHS
     by_rep: dict[int, dict[int, float]] = {}
     for row in rows:
         if int(row["monitoring_dates"]) != int(monitoring_dates):
@@ -239,18 +240,20 @@ def _paired_log_contrast(rows: list[dict[str, Any]], monitoring_dates: int) -> l
             continue
         rep = int(row["replication"])
         by_rep.setdefault(rep, {})[epoch] = float(advantage)
-    deltas: list[float] = []
+    deltas: dict[int, float] = {}
     for rep, mapping in by_rep.items():
-        if 25 in mapping and 1000 in mapping:
-            deltas.append(math.log(mapping[1000]) - math.log(mapping[25]))
+        if epoch_lo in mapping and epoch_hi in mapping:
+            deltas[int(rep)] = math.log(mapping[epoch_hi]) - math.log(mapping[epoch_lo])
     return deltas
 
 
 def compute_paired_contrasts(replication_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    d12 = _paired_log_contrast(replication_rows, 12)
-    d252 = _paired_log_contrast(replication_rows, 252)
-    n = min(len(d12), len(d252))
-    interaction_vals = [d12[i] - d252[i] for i in range(n)]
+    d12_by_rep = _paired_log_contrast_by_rep(replication_rows, 12)
+    d252_by_rep = _paired_log_contrast_by_rep(replication_rows, 252)
+    shared_reps = sorted(set(d12_by_rep.keys()).intersection(d252_by_rep.keys()))
+    d12 = [d12_by_rep[rep] for rep in sorted(d12_by_rep.keys())]
+    d252 = [d252_by_rep[rep] for rep in sorted(d252_by_rep.keys())]
+    interaction_vals = [d12_by_rep[rep] - d252_by_rep[rep] for rep in shared_reps]
 
     rows: list[dict[str, Any]] = []
     for label, values in (
@@ -816,7 +819,7 @@ def _cell_runtime(
 
 def run_sensitivity_study(config: SensitivityConfig) -> Path:
     if set(FORMAL_EPOCHS).difference(config.checkpoints):
-        raise ValueError("checkpoints must include 25 and 1000")
+        raise ValueError(f"checkpoints must include {FORMAL_EPOCHS}")
     seed_everything(config.base_seed)
     torch = __import__("torch")
 
@@ -993,7 +996,8 @@ def run_sensitivity_study(config: SensitivityConfig) -> Path:
                     "ncv_vrr_vs_mc": ncv_vrr,
                     "ncv_to_gcv_advantage": advantage,
                     "ncv_beats_gcv": bool(isinstance(advantage, (int, float)) and math.isfinite(float(advantage)) and float(advantage) > 1.0),
-                    "required_ncv_observations_to_match_gcv_50000": n_required if n_required is not None else "NA",
+                    "gcv_reporting_observations": config.pricing_paths,
+                    "required_ncv_observations_to_match_gcv_reporting_n": n_required if n_required is not None else "NA",
                     "required_ncv_observations_reason": n_reason,
                     "optimizer_cumulative_training_runtime_s": snap.optimizer_cumulative_runtime_s,
                     "training_data_generation_runtime_s": data_generation_runtime_s,

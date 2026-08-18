@@ -78,7 +78,7 @@ def test_break_even_q1_boundary_and_no_finite_case():
         proposed_marginal_cost=5.0,
     )
     assert q1["break_even_q"] == 1
-    assert q1["break_even_verified_q"] if "break_even_verified_q" in q1 else q1["verified_q"]
+    assert q1["verified_q"] is True
 
     no_finite = solve_break_even_q(
         baseline_setup_cost=0.0,
