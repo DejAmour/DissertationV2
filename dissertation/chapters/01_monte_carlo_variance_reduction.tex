@@ -1,535 +1,66 @@
-\section{Risk-Neutral Valuation and Monte Carlo Simulation}
+\chapter{Literature Review}
+\label{chap:literature_review}
 
-Monte Carlo option pricing is based on representing the value of a derivative as an expectation under a risk-neutral probability measure.
+This chapter reviews the literature needed to motivate and position the study. Formal estimator definitions are deferred to Chapter~\ref{chap:methodology}.
 
-Let $S_t$ denote the underlying asset price at time $t$, and let a derivative have maturity $T$ and payoff
+\section{Monte Carlo pricing and the meaning of efficiency}
 
-\begin{equation}
-P(S_{[0,T]}),
-\end{equation}
+\textcite{boyle_1977} established Monte Carlo simulation as a practical option-pricing method. Under risk-neutral pricing, paths of the underlying process are simulated, the discounted payoff is evaluated on each path and the sample mean approximates the option price. The method accommodates path dependence, multiple state variables and payoffs that resist analytical integration \parencite{glasserman_2004}.
 
-where the notation $S_{[0,T]}$ allows the payoff to depend on the complete path of the underlying rather than only its terminal value.
+For independent observations, variance falls as $1/n$. The convergence rate does not depend explicitly on the dimension of the random input. Dimension nevertheless affects cost: generating a longer path takes more time, payoff variance may change and a learned approximation may become harder to train. A statement about convergence in path count is therefore not equivalent to a statement about computational work.
 
-Under the risk-neutral measure $\mathbb{Q}$, and assuming a constant continuously compounded interest rate $r$, the time-zero value is
+This point was made early. \textcite{hammersley_morton_1956} argued that efficiency should reflect both sampling variance and the work needed to obtain an estimate. It becomes especially important for learned controls, where training, pilot estimation and network evaluation introduce costs that a variance-reduction ratio does not capture. A complete comparison must ask both how much variance is removed and how much work is required to remove it.
 
-\begin{equation}
-V_0
-=
-e^{-rT}
-\mathbb{E}^{\mathbb{Q}}
-\left[
-P(S_{[0,T]})
-\right].
-\end{equation}
+\section{Classical variance reduction}
 
-For a European call option the payoff is simply
+\subsection{Antithetic variates}
 
-\begin{equation}
-P(S_T)
-=
-(S_T-K)^+,
-\end{equation}
+Each Gaussian shock vector $\mathbf{Z}$ is paired with $-\mathbf{Z}$. If the resulting payoffs are negatively correlated, the pair average has lower variance than either payoff alone. The method requires no training and no analytical auxiliary. However, each estimator observation costs two path simulations, so equal-observation and equal-path comparisons answer different questions.
 
-where
+\subsection{Control variates}
 
-\begin{equation}
-x^+
-=
-\max(x,0)
-\end{equation}
+A control variate is a quantity computed on the same path as the target payoff whose expectation is known. After centring the control and subtracting it (scaled by a coefficient $\beta$), the adjusted estimator has lower variance provided the control is sufficiently correlated with the payoff. The coefficient is generally unknown and must be estimated from data. \textcite{kim_henderson_2004} study adaptive schemes that tune $\beta$ during simulation. A simpler approach estimates $\beta$ on a separate pilot sample and freezes it before final pricing. This makes the final estimator easier to analyse but exposes the pilot as a setup cost.
 
-and $K$ is the strike price.
+\textcite{portier_segers_2019} show that enlarging the space of available controls can improve statistical convergence without improving computational efficiency. Flexibility and cost must be assessed together---a theme that recurs throughout this dissertation.
 
-For a path-dependent derivative, however, the payoff can depend on many intermediate observations of $S_t$. If the required expectation cannot be calculated analytically, Monte Carlo simulation approximates it using independently simulated paths.
+\section{The geometric Asian control variate}
 
-Let
+Under GBM, the geometric average of monitored prices is lognormal, so the geometric Asian option has a closed-form price. \textcite{kemna_vorst_1990} exploit this by using the geometric payoff as a control variate for the arithmetic payoff. Because both averages are computed from the same simulated path, the two payoffs are strongly correlated. The geometric control therefore removes a large fraction of the arithmetic payoff's variance at almost no additional cost.
 
-\begin{equation}
-Y_i
-=
-e^{-rT}P_i
-\end{equation}
+\textcite{curran_1994} uses the geometric mean differently, conditioning rather than controlling, but the underlying insight is the same: the geometric average carries unusually strong analytical information about the arithmetic average.
 
-denote the discounted payoff from simulation $i$. If $N$ independent paths are generated, the standard Monte Carlo estimator is
+This makes GCV a demanding benchmark. An NCV can produce a large gain relative to plain MC and still be unattractive if GCV achieves a larger reduction with negligible setup. At the same time, GCV's strength is specific to this payoff and model. A comparable analytical control may not exist for a different payoff or diffusion. The comparison therefore tests the neural method in a deliberately unfavourable setting: classical structure is unusually strong.
 
-\begin{equation}
-\widehat{V}_{MC}
-=
-\frac{1}{N}
-\sum_{i=1}^{N}
-Y_i.
-\end{equation}
+\section{Neural control variates}
 
-Provided the required integrability conditions are satisfied, the Strong Law of Large Numbers implies
+A neural network can approximate the pricing integrand, but approximation alone does not yield a valid control variate. The network output must be centred by subtracting its expectation. If that expectation must itself be estimated by Monte Carlo, the original problem has only been displaced.
 
-\begin{equation}
-\widehat{V}_{MC}
-\rightarrow
-V_0
-\end{equation}
+\subsection{Analytical integration}
 
-almost surely as
+\textcite{el_filali_ech-chafiq_lelong_reghai_2021} solve this by restricting the architecture. A single hidden layer of ReLU units with Gaussian inputs produces Gaussian pre-activations whose positive-part expectations are available in closed form. The network expectation follows by linearity. This is the construction used in this dissertation.
 
-\begin{equation}
-N\rightarrow\infty.
-\end{equation}
+Their experiments span arithmetic Asian, basket, digital and worst-of payoffs under Black--Scholes, local-volatility and stochastic-volatility models. They report that learned controls can reduce variance across these problems and include training and pricing time in a combined speed-up measure. This is an important advance over a variance-only comparison, but the aggregated measure does not distinguish one-time training cost from marginal pricing cost. A method with high setup cost and low marginal cost can be inferior for a single valuation yet superior after many valuations; the aggregated figure cannot identify the crossover.
 
-The Central Limit Theorem provides information about the rate of convergence. If
+\subsection{Overfitting risk}
 
-\begin{equation}
-\operatorname{Var}(Y)
-=
-\sigma_Y^2,
-\end{equation}
+\textcite{wan_zhong_xiong_zhu_2020} emphasise that a flexible control can overfit a limited training sample: a low training loss need not imply a low residual variance on new observations. This motivates the strict separation of training, validation and final pricing samples adopted here. The relevant measure is out-of-sample variance, not in-sample approximation error.
 
-then
+\subsection{Architectural trade-off}
 
-\begin{equation}
-\sqrt{N}
-\left(
-\widehat{V}_{MC}-V_0
-\right)
-\overset{d}{\longrightarrow}
-\mathcal{N}(0,\sigma_Y^2).
-\end{equation}
+The shallow analytical network is fast to integrate but may be less expressive than a deeper network as model complexity grows. A deeper network can approximate the payoff more closely while making exact integration difficult or impossible. This dissertation stays with the shallow architecture to preserve analytical tractability.
 
-The standard error is therefore estimated by
+\section{Cross-contract reuse}
 
-\begin{equation}
-SE(\widehat{V}_{MC})
-=
-\frac{s_Y}{\sqrt{N}},
-\end{equation}
+The economic case for training depends partly on whether the resulting control remains useful when contract parameters change. In the language of \textcite{pan_yang_2010}, frozen NCV reuse is a restricted form of transfer learning: the reference contract supplies the source task and a change in strike, volatility or maturity creates a related target task.
 
-where $s_Y$ is the sample standard deviation of the simulated discounted payoffs.
+Reuse is not guaranteed. Changing the strike moves the payoff threshold. Changing volatility alters the path distribution. Changing maturity affects discounting, path dynamics and monitoring-date placement. Each change can weaken the relationship between the frozen network output and the target payoff. Re-estimating a target-specific $\beta$ can correct for changes in scale or sign when a useful linear relationship persists, but it cannot recover structure the network never learned. The pilot needed to estimate $\beta$ also creates a target-specific cost.
 
-This $N^{-1/2}$ convergence rate is central to the computational problem studied in this dissertation. If the number of simulations is multiplied by four, the standard error is only halved. Increasing the number of simulations can therefore become an expensive way of obtaining greater accuracy.
+\textcite{el_filali_ech-chafiq_lelong_reghai_2021} report encouraging robustness, mainly for their dimension-reduction method. Their evidence motivates reuse but does not settle the question addressed here. They do not systematically test frozen reuse of the shallow analytical control across an Asian-option contract grid, nor combine it with an explicit setup-versus-marginal cost model.
 
-Variance reduction attempts to improve the constant multiplying the $N^{-1/2}$ convergence rate rather than changing the basic Monte Carlo framework.
+The two monitoring profiles ($m=252$ and $m=12$) impose a further constraint. Their networks have different input dimensions and are not directly transferable. Reuse is therefore examined across contracts within a monitoring profile, not between profiles.
 
-\section{Antithetic Variates}
+\section{Positioning of the present study}
 
-Antithetic sampling was introduced by Hammersley and Morton. The method creates pairs of simulations that have the required marginal distribution but are deliberately dependent.
+The literature establishes that Monte Carlo is flexible but slow, classical controls can be highly effective when analytical structure is available, and neural controls can learn useful structure provided their expectation remains tractable and performance is measured out of sample.
 
-Suppose a simulation is constructed using a uniform random variable
-
-\begin{equation}
-U\sim U(0,1).
-\end{equation}
-
-Its antithetic counterpart is
-
-\begin{equation}
-\widetilde{U}
-=
-1-U.
-\end{equation}
-
-Both $U$ and $\widetilde{U}$ have the uniform distribution, while
-
-\begin{equation}
-\operatorname{Corr}(U,1-U)
-=
--1.
-\end{equation}
-
-If the required random variable $X$ has cumulative distribution function $F_X$, the two observations can be constructed using
-
-\begin{equation}
-X
-=
-F_X^{-1}(U)
-\end{equation}
-
-and
-
-\begin{equation}
-\widetilde{X}
-=
-F_X^{-1}(1-U).
-\end{equation}
-
-Both observations therefore have the required marginal distribution.
-
-Option-pricing simulations commonly use standard normal variables. Since the standard normal distribution is symmetric, if
-
-\begin{equation}
-Z\sim\mathcal{N}(0,1),
-\end{equation}
-
-then
-
-\begin{equation}
--Z\sim\mathcal{N}(0,1).
-\end{equation}
-
-Consequently, the antithetic counterpart of a vector of Gaussian path shocks
-
-\begin{equation}
-Z
-=
-(Z_1,\ldots,Z_m)^\top
-\end{equation}
-
-is simply
-
-\begin{equation}
--Z
-=
-(-Z_1,\ldots,-Z_m)^\top.
-\end{equation}
-
-Let the discounted payoffs generated by the two paths be $Y_i$ and $\widetilde{Y}_i$. Their pairwise average is
-
-\begin{equation}
-A_i
-=
-\frac{Y_i+\widetilde{Y}_i}{2}.
-\end{equation}
-
-If $M$ independent antithetic pairs are generated, the estimator becomes
-
-\begin{equation}
-\widehat{V}_{AV}
-=
-\frac{1}{M}
-\sum_{i=1}^{M}
-A_i.
-\end{equation}
-
-The method remains unbiased because each member of every pair individually follows the required distribution.
-
-The variance of one pairwise average is
-
-\begin{align}
-\operatorname{Var}(A_i)
-&=
-\frac{1}{4}
-\left[
-\operatorname{Var}(Y_i)
-+
-\operatorname{Var}(\widetilde{Y}_i)
-+
-2\operatorname{Cov}(Y_i,\widetilde{Y}_i)
-\right].
-\end{align}
-
-Since both payoffs have the same marginal variance $\sigma_Y^2$,
-
-\begin{equation}
-\operatorname{Var}(A_i)
-=
-\frac{\sigma_Y^2}{2}
-(1+\rho),
-\end{equation}
-
-where
-
-\begin{equation}
-\rho
-=
-\operatorname{Corr}
-(Y_i,\widetilde{Y}_i).
-\end{equation}
-
-The antithetic estimator therefore benefits when the two resulting payoffs are negatively correlated.
-
-It is important that the correlation of the random inputs does not determine the correlation of the payoffs. Although $Z$ and $-Z$ are perfectly opposed, the transformation from random shocks to option payoff can be highly nonlinear. Antithetic sampling is consequently most effective when the payoff behaves monotonically with respect to the underlying random inputs.
-
-This becomes more important for path-dependent options. Reversing every shock in an Asian option changes every asset price entering the arithmetic average. The resulting payoff may still be negatively correlated with the original payoff, but the relationship is less direct than for a one-period monotonic payoff.
-
-Antithetic sampling is nevertheless attractive because it is simple and requires no additional analytical pricing formula. Its cost should not, however, be described as zero. Although only one independent random vector is required for each pair, the antithetic asset path and its payoff must still be evaluated. Comparisons should therefore be made using equal payoff evaluations or equal computational budgets rather than equal numbers of independent random draws.
-
-\section{Control Variates}
-
-Control variates use a different source of information. Instead of deliberately creating dependence between two simulations, the method introduces a related random quantity whose expectation is known.
-
-Let $Y$ denote the discounted payoff being estimated,
-
-\begin{equation}
-V
-=
-\mathbb{E}[Y].
-\end{equation}
-
-Suppose a second random variable $X$ can be calculated using the same simulation and its expectation
-
-\begin{equation}
-\mu_X
-=
-\mathbb{E}[X]
-\end{equation}
-
-is known.
-
-The control-variate adjusted payoff is
-
-\begin{equation}
-Y_{CV}
-=
-Y
--
-\beta
-(X-\mu_X),
-\end{equation}
-
-where $\beta$ is a coefficient determining the magnitude of the correction.
-
-Taking expectations gives
-
-\begin{align}
-\mathbb{E}[Y_{CV}]
-&=
-\mathbb{E}[Y]
--
-\beta
-\left(
-\mathbb{E}[X]-\mu_X
-\right)
-\\
-&=
-\mathbb{E}[Y].
-\end{align}
-
-The control therefore leaves the target expectation unchanged.
-
-The variance is
-
-\begin{equation}
-\operatorname{Var}(Y_{CV})
-=
-\operatorname{Var}(Y)
-+
-\beta^2\operatorname{Var}(X)
--
-2\beta\operatorname{Cov}(Y,X).
-\end{equation}
-
-Differentiating with respect to $\beta$ gives the variance-minimising coefficient
-
-\begin{equation}
-\beta^*
-=
-\frac{
-\operatorname{Cov}(Y,X)
-}{
-\operatorname{Var}(X)
-}.
-\end{equation}
-
-Substitution gives
-
-\begin{equation}
-\operatorname{Var}(Y_{CV})
-=
-\operatorname{Var}(Y)
-(1-\rho_{YX}^{2}),
-\end{equation}
-
-where $\rho_{YX}$ is the correlation between the target and the control.
-
-The result shows why correlation is important. A control with correlation close to zero provides little benefit, whereas a control with absolute correlation close to one can remove a large proportion of the original variance.
-
-The correlation can be positive or negative because the optimal coefficient adjusts accordingly. The more difficult requirement is that the expectation of the control must be known.
-
-For a complex derivative, it is therefore natural to search for a simpler related quantity that can be valued analytically. Asian options provide a particularly useful example.
-
-\section{Arithmetic and Geometric Asian Options}
-
-Consider $m$ monitoring dates
-
-\begin{equation}
-0<t_1<t_2<\cdots<t_m=T.
-\end{equation}
-
-The discrete arithmetic average of the underlying asset is
-
-\begin{equation}
-A
-=
-\frac{1}{m}
-\sum_{j=1}^{m}
-S_{t_j}.
-\end{equation}
-
-The payoff of an arithmetic-average Asian call is
-
-\begin{equation}
-P_A
-=
-(A-K)^+.
-\end{equation}
-
-Its time-zero value is therefore
-
-\begin{equation}
-V_A
-=
-e^{-rT}
-\mathbb{E}^{\mathbb{Q}}
-\left[
-(A-K)^+
-\right].
-\end{equation}
-
-Even when each $S_{t_j}$ is lognormally distributed, the arithmetic average of correlated lognormal prices is not itself lognormal. This prevents the direct use of a Black-Scholes-type closed-form formula.
-
-The corresponding geometric average is
-
-\begin{equation}
-G
-=
-\left(
-\prod_{j=1}^{m}
-S_{t_j}
-\right)^{1/m}.
-\end{equation}
-
-Taking logarithms gives
-
-\begin{equation}
-\log G
-=
-\frac{1}{m}
-\sum_{j=1}^{m}
-\log S_{t_j}.
-\end{equation}
-
-Under GBM, each log-price is Gaussian and their linear combination is therefore also Gaussian. The geometric average is consequently lognormal.
-
-This allows the geometric Asian option
-
-\begin{equation}
-P_G
-=
-(G-K)^+
-\end{equation}
-
-to be valued analytically.
-
-The discounted geometric payoff
-
-\begin{equation}
-X
-=
-e^{-rT}(G-K)^+
-\end{equation}
-
-therefore provides a natural control for
-
-\begin{equation}
-Y
-=
-e^{-rT}(A-K)^+.
-\end{equation}
-
-Both averages are calculated from exactly the same simulated price path, and they generally move closely together.
-
-The geometric Asian control-variate estimator is
-
-\begin{equation}
-\widehat{V}_{GCV}
-=
-\frac{1}{N}
-\sum_{i=1}^{N}
-\left[
-Y_i
--
-\widehat{\beta}
-(X_i-V_G)
-\right],
-\end{equation}
-
-where $V_G$ is the analytical geometric Asian value.
-
-This provides an important benchmark for the present dissertation. A neural control variate should not be considered successful merely because it improves on unreduced Monte Carlo. It must be compared with an inexpensive classical control that is already closely related to the target payoff.
-
-\section{Dimensionality and the Limits of Classical Variance Reduction}
-
-Monte Carlo simulation is often described as relatively insensitive to dimensionality because its asymptotic $N^{-1/2}$ convergence rate does not explicitly deteriorate with the dimension of the integral.
-
-This does not mean that dimensionality is irrelevant.
-
-An Asian option with $m$ monitoring dates may require a vector
-
-\begin{equation}
-Z
-=
-(Z_1,\ldots,Z_m)
-\end{equation}
-
-of independent Gaussian shocks to construct one price path. Increasing $m$ increases the number of random variables, simulated asset prices and arithmetic operations required for every path.
-
-More importantly for variance reduction, the relationship between these random inputs and the final payoff becomes increasingly complicated.
-
-Antithetic variates remain valid in high dimension, but changing
-
-\begin{equation}
-Z
-\rightarrow
--Z
-\end{equation}
-
-does not guarantee that the final payoff is strongly negatively correlated with the original payoff.
-
-Control variates face a different restriction. Their effectiveness is not directly reduced by high dimensionality, but a suitable analytical control must still be found. For an arithmetic Asian option under GBM, the geometric average provides an unusually convenient solution. Similar controls may become weaker or unavailable when the payoff, stochastic model or number of underlying factors becomes more complicated.
-
-The central issue is therefore not simply a large input dimension. It is the combination of dimensionality, nonlinear payoff structure and the requirement for a control with a known expectation.
-
-This motivates learned control variates. A neural network can potentially approximate a high-dimensional relationship without requiring the analyst to specify the functional form of the control in advance. The difficulty is retaining the known-expectation property required by control variates.
-
-\section{Neural and Automatic Control Variates}
-
-Machine learning provides a natural mechanism for constructing a function that is strongly related to a complicated Monte Carlo integrand.
-
-If a network $H(Z)$ can learn the relationship
-
-\begin{equation}
-H(Z)
-\approx
-f(Z),
-\end{equation}
-
-then the residual
-
-\begin{equation}
-f(Z)-H(Z)
-\end{equation}
-
-may have substantially lower variance than $f(Z)$.
-
-A generic neural-network approximation cannot immediately be used as a conventional control variate because its expectation
-
-\begin{equation}
-\mathbb{E}[H(Z)]
-\end{equation}
-
-will not usually be known.
-
-This distinction is essential. Predicting the payoff accurately is not sufficient. A learned function only becomes useful as a control variate when its contribution to the expectation can be removed exactly, or to sufficient independent precision, without introducing a larger estimation problem.
-
-The automatic control variate approach considered in this dissertation uses an architecture designed to retain analytical tractability. A shallow ReLU network receives the Gaussian random shocks used in the Monte Carlo simulation. The linear combination entering each hidden neuron remains Gaussian, and the expectation of a ReLU applied to a Gaussian variable can be obtained in closed form.
-
-The trained network can therefore be inserted into
-
-\begin{equation}
-Y_{NCV}
-=
-f(Z)
--
-H(Z)
-+
-\mathbb{E}[H(Z)].
-\end{equation}
-
-The expectation remains
-
-\begin{equation}
-\mathbb{E}[Y_{NCV}]
-=
-\mathbb{E}[f(Z)].
-\end{equation}
-
-The method therefore combines the flexibility of a learned approximation with the known-expectation requirement of a classical control variate.
-
-Its cost is the additional training stage. The empirical question is therefore not only whether the variance is lower, but whether the variance reduction compensates for the computational resources required to train and evaluate the network.
+What remains unclear is how these findings interact when the classical benchmark is unusually strong and neural training is treated as a reusable investment rather than part of a single runtime. This study addresses the gap by comparing MC, AV, GCV and NCV under consistent path accounting; separating setup cost from marginal cost; and testing both contract-specific and frozen controls across two monitoring profiles. The question is not simply whether the network reduces variance, but whether it removes enough residual variation, at low enough marginal cost, to compete with the available classical alternative.
