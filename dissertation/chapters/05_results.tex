@@ -1,2 +1,149 @@
-\section{Results Placeholder}
-TODO: Insert empirical results, tables, and figures once experiments are finalised.
+\chapter{Results}
+\label{chap:results}
+
+This chapter reports the empirical performance of the four estimators under the two monitoring profiles defined in Chapter~\ref{chap:experimental_design}. The contract-specific comparison is reported first, followed by the checkpoint sensitivity experiment, matched-accuracy cost projections and the exploratory frozen-reuse results. Variance-reduction ratios are summarised using geometric means across replications because the ratios are positive and multiplicative. For the NCV/GCV comparison, let $A = \mathrm{Var}(\mathrm{GCV})/\mathrm{Var}(\mathrm{NCV})$, so $A > 1$ favours NCV and $A < 1$ favours GCV. The two monitoring profiles are treated as separate experimental regimes rather than as a causal test of monitoring frequency.
+
+\section{Validation and reporting scope}
+
+Both principal experiments completed without failed rows. Each profile covered seven contracts and thirty replications, and the saved validation reports recorded no failures or warnings. The checkpoint studies also passed their statistical validation checks. Runtime diagnostics did produce warnings when timing did not scale sufficiently linearly with path count; in those cases the implementation used a piecewise empirical projection. These warnings affect the precision of projected costs, but not the directly estimated variance ratios.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Validation status of the reported experiments}
+    \label{tab:validation_status}
+    \begin{tabular}{llll}
+        \hline
+        Experiment & Profile & Replications & Final rows & Status \\
+        \hline
+        Principal experiment & $m = 12$ & 30 & 1{,}200 & Passed \\
+        Principal experiment & $m = 252$ & 30 & 1{,}200 & Passed \\
+        Checkpoint curve & $m = 12$ & 10 & Eight checkpoints & Passed \\
+        Checkpoint curve & $m = 252$ & 10 & Eight checkpoints & Passed \\
+        $2 \times 2$ sensitivity & Both profiles & 30 & Four cells & Passed \\
+        \hline
+    \end{tabular}
+\end{table}
+
+The arithmetic Asian reference prices are independent high-precision Monte Carlo estimates rather than closed-form values. They are therefore used to identify material pricing error, not to treat very small differences as exact bias. Across the reported methods, the mean price estimates remained close to their corresponding references. The main separation between methods came from estimator variance and RMSE rather than from a persistent shift in mean price.
+
+\section{Contract-specific variance reduction}
+
+The 12-date results show a substantial advantage for the contract-specific NCV after 1{,}000 training epochs. GCV reduced variance relative to MC by factors ranging from 201.39 to 4{,}588.51. The corresponding NCV ratios ranged from 3{,}131.77 to 53{,}795.76. More importantly, $A$ exceeded one for every contract, with values between 11.18 and 23.31. NCV had lower variance than GCV in all thirty replications for each of the seven contracts. The largest relative advantage occurred for the long-maturity contract and the smallest for the short-maturity contract, although the latter remained economically large in statistical terms.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Geometric-mean variance-reduction ratios for the 12-date profile}
+    \label{tab:vrf_12}
+    \begin{tabular}{lrrr}
+        \hline
+        Contract & GCV/MC & NCV/MC & $A$: NCV/GCV \\
+        \hline
+        Reference & 1{,}290.23 & 22{,}810.80 & 17.680 \\
+        Low strike & 1{,}629.31 & 25{,}913.53 & 15.905 \\
+        High strike & 232.74 & 3{,}131.77 & 13.456 \\
+        Low volatility & 4{,}588.51 & 53{,}795.76 & 11.724 \\
+        High volatility & 201.39 & 3{,}565.31 & 17.704 \\
+        Short maturity & 2{,}698.56 & 30{,}167.67 & 11.179 \\
+        Long maturity & 598.38 & 13{,}949.08 & 23.312 \\
+        \hline
+    \end{tabular}
+\end{table}
+
+The result changes under the 252-date profile. GCV remained strong, with variance reductions against MC between 198.38 and 4{,}682.90. The contract-specific NCV also reduced variance relative to MC for every contract, but its performance was less consistent, ranging from 1.74 for the high-strike contract to 264.93 for the short-maturity contract. $A$ remained below one throughout, between 0.009 and 0.281, so GCV had lower variance for all seven contracts. The defensible conclusion is therefore that NCV improved on MC throughout this profile, not that it improved on every classical comparator.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Geometric-mean variance-reduction ratios for the 252-date profile}
+    \label{tab:vrf_252}
+    \begin{tabular}{lrrr}
+        \hline
+        Contract & GCV/MC & NCV/MC & $A$: NCV/GCV \\
+        \hline
+        Reference & 1{,}310.45 & 227.69 & 0.174 \\
+        Low strike & 1{,}507.44 & 17.49 & 0.012 \\
+        High strike & 198.38 & 1.74 & 0.009 \\
+        Low volatility & 4{,}682.90 & 75.82 & 0.016 \\
+        High volatility & 205.37 & 45.98 & 0.224 \\
+        Short maturity & 2{,}738.12 & 264.93 & 0.097 \\
+        Long maturity & 604.01 & 169.80 & 0.281 \\
+        \hline
+    \end{tabular}
+\end{table}
+
+AV produced smaller but stable gains in both profiles. Its geometric-mean variance reduction against MC ranged from 2.12 to 56.70 for $m = 12$ and from 2.10 to 65.86 for $m = 252$. GCV exceeded AV for every contract, so a full AV column is omitted to avoid widening Tables~\ref{tab:vrf_12} and \ref{tab:vrf_252} without changing the main ranking. The 12-date NCV exceeded AV throughout. Under $m = 252$, however, AV outperformed NCV for both strike changes: the respective AV factors were 65.86 and 2.10, compared with 17.49 and 1.74 for NCV. AV therefore remains a relevant low-setup benchmark even though it was dominated by GCV.
+
+RMSE follows the same broad pattern. Under the 12-date profile, the contract-specific NCV had lower RMSE than GCV for every contract. Under the 252-date profile, GCV had lower RMSE throughout. These differences are mainly attributable to estimator variance. Absolute biases were small relative to the dispersion of the underlying MC estimator, but the simulated reference-price uncertainty prevents very small bias differences from being interpreted as exact rankings.
+
+\section{Training horizon and the $2 \times 2$ sensitivity experiment}
+
+The checkpoint curves explain why the profile-specific results should not be compared without reference to training duration. For $m = 12$, mean validation residual variance fell from 0.121 at 25 epochs to 0.00297 at 1{,}000 epochs. The associated validation variance-reduction ratio against MC rose from 619 to 26{,}256. Validation performance was still improving at the upper boundary, so 1{,}000 epochs is the best checkpoint within the evaluated grid rather than a demonstrated global optimum.
+
+For $m = 252$, mean validation residual variance was 0.290 at 25 epochs and 0.302 at 1{,}000 epochs. Training loss continued to fall over this interval, but the held-out residual variance did not improve consistently. This is the relevant reason for selecting 25 epochs. It is not that the higher-dimensional network required fewer optimiser steps in general, but that additional fitting of the training sample did not translate into better out-of-sample control quality in this experiment.
+
+\begin{figure}[htbp]
+    \centering
+    % Insert figure graphic here when available.
+    \caption{Held-out NCV/GCV variance advantage in the crossed profile and training-horizon sensitivity experiment. The dashed line marks parity.}
+    \label{fig:checkpoint_sensitivity}
+\end{figure}
+
+The crossed sensitivity experiment fixes both profiles at 25 and 1{,}000 epochs. At $m = 12$, $A$ increased from 0.501 at 25 epochs to 17.745 at 1{,}000 epochs, and the NCV won all thirty replications in the longer-training cell. The paired ratio of the two cells was 35.43. At $m = 252$, $A$ changed from 0.179 to 0.170, so longer training did not rescue NCV relative to GCV. The figure therefore shows an interaction between profile and training horizon, but it does not identify monitoring dimension as the cause because the payoff discretisation and network parameter count also change.
+
+\section{Matched-accuracy cost and break-even}
+
+The matched-accuracy calculation changes the interpretation of the 12-date statistical result. Scratch NCV has a substantial setup cost because a separate network is trained for each contract. Its much lower marginal path requirement nevertheless creates a projected break-even against GCV when the same contract is valued repeatedly. Using the setup and marginal cost definitions in Section~\ref{eq:experimental_total_cost}, the median-runtime break-even lies between 609 and 703 valuations across the seven contracts. At $Q = 1{,}000$, projected NCV cost is between 26.0\% and 37.2\% below GCV cost.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Projected 12-date scratch-NCV break-even against GCV at matched accuracy}
+    \label{tab:break_even_12}
+    \begin{tabular}{lrrrl}
+        \hline
+        Contract & Break-even $Q$ & GCV cost at $Q=1{,}000$ (s) & NCV cost at $Q=1{,}000$ (s) & Saving \\
+        \hline
+        Reference & 688 & 46.20 & 32.82 & 29.0\% \\
+        Low strike & 684 & 47.03 & 33.30 & 29.2\% \\
+        High strike & 676 & 48.59 & 34.31 & 29.4\% \\
+        Low volatility & 703 & 48.32 & 35.74 & 26.0\% \\
+        High volatility & 626 & 50.96 & 33.06 & 35.1\% \\
+        Short maturity & 694 & 48.78 & 35.66 & 26.9\% \\
+        Long maturity & 609 & 51.58 & 32.37 & 37.2\% \\
+        \hline
+    \end{tabular}
+\end{table}
+
+These thresholds are projections, not directly observed production workloads. They combine replication-level variance estimates with measured timing profiles, and some timing series failed the linearity diagnostic. The code therefore used piecewise empirical projection, while a mean-runtime sensitivity calculation produced similar break-even values. The estimates are useful for comparing orders of magnitude, but they should not be treated as hardware-independent constants.
+
+No finite break-even against GCV was supported under the 252-date profile. NCV had higher variance than GCV for every contract and therefore required approximately 3.6 to 111 times as many pricing observations to achieve the same sampling variance. The measured difference in pricing time was insufficient to offset this statistical disadvantage, while NCV also incurred a separate training cost. Consequently, the evidence does not support a workload at which scratch NCV becomes less costly than GCV, and no numerical break-even threshold is reported.
+
+\section{Exploratory frozen reuse}
+
+Frozen reuse was intended to test whether the reference-network training cost could be shared across related contracts. The beta-one specification was not competitive. Its geometric-mean variance advantage over GCV remained below 0.016 for every target contract in both profiles. Estimating a new target-specific coefficient improved reuse, particularly for maturity changes, but most results still remained below parity.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Frozen estimated-$\beta$ variance advantage over GCV}
+    \label{tab:frozen_reuse}
+    \begin{tabular}{lrr}
+        \hline
+        Target contract & $A$, $m = 12$ & $A$, $m = 252$ \\
+        \hline
+        Low strike & 0.004 & 0.004 \\
+        High strike & 0.009 & 0.009 \\
+        Low volatility & 0.011 & 0.010 \\
+        High volatility & 0.127 & 0.116 \\
+        Short maturity & 0.841 & 0.082 \\
+        Long maturity & 1.830 & 0.312 \\
+        \hline
+    \end{tabular}
+\end{table}
+
+The close values for the strike and low-volatility transfers were checked against the replication-level outputs and are not duplicated rows or a rounding artefact. For these contracts, both GCV performance against MC and estimated-beta frozen reuse against MC were similar across the two profiles. Their ratio against one another is therefore also similar, despite the different network dimensions and training horizons.
+
+Only the 12-date long-maturity contract produced $A > 1$, with a geometric-mean advantage of 1.83. Its projected matched-accuracy break-even was 1{,}490 valuations after including the shared reference training and target pilot. The 12-date short-maturity result was closer to parity at 0.841, but all strike and volatility transfers were materially weaker. Under $m = 252$, estimated-beta reuse remained below GCV for every target, with the best result again occurring for long maturity at 0.312.
+
+The portfolio calculation reinforces this result. Reusing one reference network across a complete cycle of the six target contracts produced no finite break-even against GCV because the transfer estimator had a higher marginal matched-accuracy cost. Sharing setup is therefore not enough on its own. The frozen network must also retain sufficiently strong correlation with each target payoff, and the present reference network generally did not do so outside the maturity change.
+
+\section{Results summary}
+
+The experiments produce a conditional rather than universal result. Under the 12-date profile and the 1{,}000-epoch checkpoint, contract-specific NCV reduced variance substantially beyond GCV and could recover its training cost after approximately 600 to 700 repeated valuations. Under the 252-date profile, GCV remained the stronger estimator for every contract, and extending NCV training to 1{,}000 epochs did not change that conclusion. Frozen reuse was weaker still, except for the 12-date long-maturity contract after coefficient re-estimation. The main empirical lesson is that an analytically tractable neural control can be highly effective, but its value depends on the complete profile, training horizon and workload. Statistical variance reduction and computational efficiency are related, but they are not interchangeable.
