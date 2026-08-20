@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Build dissertation_handover.zip with required results, configs, and scripts."""
+"""Build dissertation_handover.zip with required results, configs, and scripts.
+
+Notes:
+- `replication_level_results.csv` is intentionally included in both
+  `principal_results` and `frozen_reuse` categories because it contains both
+  principal and frozen-transfer outputs for the requested handover.
+- Relative source paths are preserved under each category to keep provenance
+  visible in the archive layout.
+"""
 
 from __future__ import annotations
 
@@ -47,6 +55,7 @@ CATEGORIES: dict[str, list[str]] = {
 
 
 def _validate_files(repo_root: Path) -> list[tuple[str, Path]]:
+    """Return (archive_path, source_path) pairs after verifying required files."""
     mapped_files: list[tuple[str, Path]] = []
     missing: list[Path] = []
 
