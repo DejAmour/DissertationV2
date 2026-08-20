@@ -119,7 +119,7 @@ The network is fitted on a training sample of Gaussian inputs and their discount
 
 For a frozen network, the neural control-variate observation is
 \begin{equation}
-Y_{\mathrm{NCV}} = f(\mathbf{Z}) - \beta\left[H_{\theta}(\mathbf{Z}) - \mathbb{E}\!\left[H_{\theta}(\mathbf{Z})\right]\right].
+Y_{\mathrm{NCV}} = f(\mathbf{Z}) - \beta\left[H_{\theta}(\mathbf{Z}) - \mathbb{E}\left[H_{\theta}(\mathbf{Z})\right]\right].
 \label{eq:ncv_observation}
 \end{equation}
 The pricing estimator is the average of independent copies of \eqref{eq:ncv_observation}. It is unbiased for any coefficient $\beta$ that is fixed independently of the pricing sample. Contract-specific NCV trains $\theta$ for the target contract and estimates $\beta$ from a disjoint pilot sample. The same pilot logic used for GCV therefore applies. A fixed value $\beta = 1$ is also informative because it tests the network as the direct approximation learned during training, without target-sample rescaling.
