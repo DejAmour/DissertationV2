@@ -1,0 +1,1 @@
+No stage8 seven-contract principal m=12 output directory was found in this repository snapshot.

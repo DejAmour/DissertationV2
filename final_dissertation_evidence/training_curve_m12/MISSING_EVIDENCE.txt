@@ -1,0 +1,1 @@
+No ncv_training_curve output folder for m=12 was found in this repository snapshot.
