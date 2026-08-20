@@ -30,7 +30,7 @@ f(\mathbf{Z}) &= e^{-rT} \max\bigl(A(\mathbf{Z}) - K, 0\bigr),
 \end{align}
 where $K$ is the strike and $T$ is the maturity. The no-arbitrage price is the risk-neutral expectation $V = \mathbb{E}[f(\mathbf{Z})]$. The arithmetic average is a sum of correlated lognormal variables and does not generally have a convenient distribution. This prevents direct evaluation of the expectation in \eqref{eq:arithmetic_payoff} and motivates simulation. The methodological problem is therefore to estimate the same expectation with less sampling variation or lower total computational cost.
 
-\section{Standard Monte Carlo estimator}
+\section{Standard Monte Carlo}
 
 For independent Gaussian inputs $\mathbf{Z}^{(1)}, \ldots, \mathbf{Z}^{(n)}$, standard Monte Carlo evaluates the discounted payoff on every path and forms the sample mean
 \begin{equation}
@@ -119,14 +119,14 @@ The network is fitted on a training sample of Gaussian inputs and their discount
 
 For a frozen network, the neural control-variate observation is
 \begin{equation}
-Y_{\mathrm{NCV}} = f(\mathbf{Z}) - \beta\left[H_{\theta}(\mathbf{Z}) - \mathbb{E}(H_{\theta}(\mathbf{Z}))\right].
+Y_{\mathrm{NCV}} = f(\mathbf{Z}) - \beta\left[H_{\theta}(\mathbf{Z}) - \mathbb{E}\!\left[H_{\theta}(\mathbf{Z})\right]\right].
 \label{eq:ncv_observation}
 \end{equation}
 The pricing estimator is the average of independent copies of \eqref{eq:ncv_observation}. It is unbiased for any coefficient $\beta$ that is fixed independently of the pricing sample. Contract-specific NCV trains $\theta$ for the target contract and estimates $\beta$ from a disjoint pilot sample. The same pilot logic used for GCV therefore applies. A fixed value $\beta = 1$ is also informative because it tests the network as the direct approximation learned during training, without target-sample rescaling.
 
 For cross-contract reuse, let $\lambda_0$ denote the reference contract and $\lambda$ a target contract. The network $\theta_0$ trained at $\lambda_0$ is held fixed while the target payoff is evaluated. Frozen beta-one reuse sets $\beta = 1$ and incurs no target-specific pilot. Frozen estimated-beta reuse uses a small independent target pilot to estimate the optimal linear coefficient between the target payoff and $H_{\theta_0}$. The second method can correct a change in scale when the learned output remains informative, but cannot recreate payoff features absent from the frozen representation. Reuse is conducted within each monitoring profile because the 12- and 252-date networks have different input dimensions.
 
-\section{Measures of estimator efficiency}
+\section{Efficiency measures}
 
 The empirical comparison separates statistical performance from computational cost. For method $M$, the principal statistical measure is the variance-reduction factor
 \begin{equation}
@@ -137,13 +137,13 @@ A value above one indicates a lower sampling variance than standard Monte Carlo 
 
 Computational accounting distinguishes the setup cost $S_M$ from the marginal pricing cost $M_M$. Standard Monte Carlo and antithetic variates have zero model-training setup. GCV setup consists of the target pilot. A scratch NCV includes training-data generation and optimiser time, while frozen reuse includes the shared reference training cost and, for estimated-beta reuse, a target-specific pilot. For $Q$ valuations, total measured cost is represented as
 \begin{equation}
-C_M(Q) = S_M + Q M_M.
+C_M(Q) = S_M + Q\,M_M.
 \label{eq:total_cost}
 \end{equation}
 When method A has a larger setup cost but lower marginal cost than method B, the continuous break-even point is $[S_A - S_B]/[M_B - M_A]$. The reported value is the smallest integer $Q$ at which A is no more expensive, with the $Q = 1$ boundary checked explicitly. If A has both greater setup and no lower marginal cost, no finite break-even exists. Shared training is counted once when reuse is evaluated across a sequence of target contracts.
 
 Three complementary comparisons are reported. Equal-observation results isolate variance reduction for a fixed number of estimator observations. The path-budget comparison applies the method-specific allocations set out in Chapter~4: pilot paths are deducted where required, whereas NCV training is retained as a separately reported setup cost. It should therefore not be interpreted as equalising total computational work. Matched-accuracy results estimate the path count and runtime required for each method to attain the precision of the baseline. Antithetic results identify both pair counts and total paths. Together, these measures prevent a variance gain from being presented as a computational gain when it is offset by training, pilot estimation or network-evaluation cost.
 
-\section{Methodological summary}
+\section{Summary}
 
 All four estimators target the same risk-neutral expectation. MC averages the discounted arithmetic payoff directly. AV changes the Gaussian sampling scheme. GCV subtracts a centred geometric payoff with an exact option value, while NCV subtracts a learned shallow network whose expectation is available from normal positive-part moments. Independent training, pilot, validation and pricing samples preserve the interpretation of the final estimates. The next chapter converts these definitions into the two-stage experimental design, specifying the contracts, path allocations, training policy, replications and timing procedure.
