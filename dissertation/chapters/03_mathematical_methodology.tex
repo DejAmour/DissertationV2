@@ -1,186 +1,149 @@
 \chapter{Methodology}
 \label{chap:methodology}
 
-This chapter defines the pricing problem and the four Monte Carlo estimators compared in the empirical analysis. Standard Monte Carlo provides the baseline. Antithetic variates modify the sampling scheme. The geometric and neural control variates each subtract a centred auxiliary quantity whose expectation is available analytically. The chapter closes by defining the efficiency measures used to compare them. Contract specifications, training hyperparameters and path allocations are reserved for Chapter~4.
+This chapter defines the pricing problem and the four Monte Carlo estimators used in the empirical analysis. The aim is to make the estimators comparable before their implementation and performance are considered. Standard Monte Carlo provides the baseline. Antithetic variates alter the sampling scheme, while the geometric and neural control variates subtract centred quantities whose expectations are available analytically. The chapter then defines the statistical and computational efficiency measures used to compare these methods. Contract grids, training hyperparameters and the detailed allocation of paths are reserved for Chapter~4.
 
 \section{Risk-neutral pricing framework}
 
-Let $S_t$ denote the underlying asset price at time $t$. Under the risk-neutral measure, the asset follows geometric Brownian motion with constant risk-free rate $r$ and volatility $\sigma$:
+Let $S_t$ denote the underlying asset price at time $t$. Under the risk-neutral measure, the asset is assumed to follow geometric Brownian motion with constant risk-free rate $r$ and volatility $\sigma$:
 \begin{equation}
 \mathrm{d}S_t = rS_t\,\mathrm{d}t + \sigma S_t\,\mathrm{d}W_t,
 \label{eq:gbm_sde}
 \end{equation}
-where $W_t$ is a standard Brownian motion. The solution over a monitoring interval $\Delta t$ can be simulated exactly. For equally spaced monitoring dates $t_j = jT/m$, $j=1,\dots,m$, the recursive path equation is
+where $W_t$ is a standard Brownian motion. The solution over a monitoring interval $\Delta t$ is simulated exactly rather than through an Euler approximation. For monitoring dates $t_j = jT/m$, $j = 1, \ldots, m$, the recursive path equation is
 \begin{equation}
-S_j = S_{j-1}\exp\left[\left(r-\tfrac{1}{2}\sigma^2\right)\Delta t + \sigma\sqrt{\Delta t}\,Z_j\right],
+S_j = S_{j-1} \exp\left[\left(r - \tfrac{1}{2}\sigma^2\right)\Delta t + \sigma\sqrt{\Delta t}\,Z_j\right],
 \label{eq:gbm_discrete}
 \end{equation}
-where $\Delta t = T/m$ and $Z_1,\dots,Z_m$ are independent standard normal draws. A simulated path is therefore a deterministic function of the Gaussian vector $\mathbf{Z}=(Z_1,\dots,Z_m)$. This representation is shared by all four estimators and is essential for the neural control, whose analytical expectation relies on the inputs being Gaussian.
+where $\Delta t = T/m$ and $Z_1, \ldots, Z_m$ are independent standard normal variables. A simulated path can therefore be written as a deterministic function of the Gaussian vector $\mathbf{Z} = (Z_1, \ldots, Z_m)$. This representation is useful for all four estimators and is essential for the neural control, because a linear transformation of $\mathbf{Z}$ remains Gaussian.
 
-Two monitoring profiles are examined: $m=12$ (monthly) and $m=252$ (approximately business-daily) over a one-year maturity. They are treated as distinct pricing regimes. Increasing $m$ changes both the discretely monitored payoff and the dimension of the neural-network input, so the comparison is not interpreted as an isolated experiment on monitoring frequency.
+Two monitoring profiles are examined later: $m = 12$ and $m = 252$. For a one-year maturity these correspond approximately to monthly and business-daily monitoring. They are treated as distinct pricing regimes. Increasing $m$ changes the discretely monitored payoff and also increases the dimension of the neural-network input, so the comparison is not interpreted as the isolated causal effect of monitoring frequency.
 
 \subsection{Arithmetic Asian payoff}
 
 The arithmetic average and discounted call payoff on a simulated path are
 \begin{align}
-A(\mathbf{Z}) &= \frac{1}{m}\sum_{j=1}^{m} S_j,
+A(\mathbf{Z}) &= \frac{1}{m} \sum_{j=1}^{m} S_j,
 \label{eq:arithmetic_average}\\
-f(\mathbf{Z}) &= e^{-rT}\max\bigl(A(\mathbf{Z})-K,\,0\bigr),
+f(\mathbf{Z}) &= e^{-rT} \max\bigl(A(\mathbf{Z}) - K, 0\bigr),
 \label{eq:arithmetic_payoff}
 \end{align}
-where $K$ is the strike and $T$ is the maturity. The no-arbitrage price is $V=\mathbb{E}[f(\mathbf{Z})]$. Because the arithmetic average is a sum of correlated lognormal variables, this expectation has no convenient closed form. Simulation is therefore necessary, and the methodological problem is to estimate $V$ with less sampling variation or lower total cost.
+where $K$ is the strike and $T$ is the maturity. The no-arbitrage price is the risk-neutral expectation $V = \mathbb{E}[f(\mathbf{Z})]$. The arithmetic average is a sum of correlated lognormal variables and does not generally have a convenient distribution. This prevents direct evaluation of the expectation in \eqref{eq:arithmetic_payoff} and motivates simulation. The methodological problem is therefore to estimate the same expectation with less sampling variation or lower total computational cost.
 
-\section{Standard Monte Carlo}
+\section{Standard Monte Carlo estimator}
 
-For independent draws $\mathbf{Z}^{(1)},\dots,\mathbf{Z}^{(n)}$, the standard Monte Carlo estimator is the sample mean of the discounted payoffs:
+For independent Gaussian inputs $\mathbf{Z}^{(1)}, \ldots, \mathbf{Z}^{(n)}$, standard Monte Carlo evaluates the discounted payoff on every path and forms the sample mean
 \begin{equation}
-\hat{V}_{\mathrm{MC}} = \frac{1}{n}\sum_{i=1}^{n} f\bigl(\mathbf{Z}^{(i)}\bigr).
+\hat{V}_{\mathrm{MC}} = \frac{1}{n} \sum_{i=1}^{n} f\bigl(\mathbf{Z}^{(i)}\bigr).
 \label{eq:mc_estimator}
 \end{equation}
-
-This estimator is unbiased with variance $\mathrm{Var}[f(\mathbf{Z})]/n$. By the central limit theorem, an approximate $100(1-\alpha)\%$ confidence interval is
+The estimator is unbiased and has variance $\mathrm{Var}[f(\mathbf{Z})]/n$. Provided the payoff has finite variance, the central limit theorem gives an approximate $100(1 - \alpha)\%$ confidence interval
 \begin{equation}
-\hat{V}_{\mathrm{MC}} \pm t_{1-\alpha/2,\,n-1}\frac{s_f}{\sqrt{n}},
+\hat{V}_{\mathrm{MC}} \pm t_{1-\alpha/2,\,n-1} \frac{s_f}{\sqrt{n}},
 \label{eq:mc_ci}
 \end{equation}
-where $s_f$ is the sample standard deviation of the payoffs. Standard error falls at rate $O(n^{-1/2})$: halving it requires roughly four times as many paths. This makes standard Monte Carlo a useful but expensive baseline \parencite{boyle_1977,glasserman_2004}. Its variance, runtime and confidence-interval width serve as the reference values throughout the empirical chapters.
+where $s_f$ is the sample standard deviation of the discounted payoff. The standard error decreases at the inverse square-root rate. Halving it therefore requires approximately four times as many independent paths. This convergence rate makes standard Monte Carlo a useful but computationally demanding baseline \parencite{boyle_1977,glasserman_2004}. In the empirical chapters, its sample variance, runtime and confidence-interval width provide the reference values for each variance-reduction method.
 
 \section{Antithetic variates}
 
-Antithetic variates exploit the symmetry of the standard normal distribution. If $\mathbf{Z}$ has the required distribution, so does $-\mathbf{Z}$. Each draw is paired with its negative and the two payoffs are averaged:
+Antithetic variates exploit the symmetry of the multivariate standard normal distribution. If $\mathbf{Z}$ has the required distribution, then $-\mathbf{Z}$ has the same distribution. Each base draw is therefore paired with its negative and the two discounted payoffs are averaged:
 \begin{equation}
-Y_{\mathrm{AV}}(\mathbf{Z}) = \frac{1}{2}\left[f(\mathbf{Z}) + f(-\mathbf{Z})\right].
+Y_{\mathrm{AV}}(\mathbf{Z}) = \tfrac{1}{2}\left[f(\mathbf{Z}) + f(-\mathbf{Z})\right].
 \label{eq:av_observation}
 \end{equation}
-
-The estimator averages $n$ independent pair values. It is unbiased because both elements of each pair have expectation $V$. The variance of a single pair is
+The corresponding estimator is the mean of $n$ independent pair averages. It remains unbiased because both elements of the pair have expectation $V$. Its variance per pair is
 \begin{equation}
-\mathrm{Var}(Y_{\mathrm{AV}})=\frac{1}{2}\,\mathrm{Var}(f)\left[1+\mathrm{Corr}\bigl(f(\mathbf{Z}),f(-\mathbf{Z})\bigr)\right].
+\mathrm{Var}(Y_{\mathrm{AV}}) = \tfrac{1}{2} \, \mathrm{Var}(f)\left[1 + \mathrm{Corr}\bigl(f(\mathbf{Z}), f(-\mathbf{Z})\bigr)\right].
 \label{eq:av_variance}
 \end{equation}
-
-Negative within-pair correlation reduces variance. For a monotone payoff driven by Gaussian shocks this typically holds, though the magnitude depends on the specific payoff. The method requires no training or pilot estimation, making it a low-setup benchmark \parencite{hammersley_morton_1956}.
-
-Path accounting requires care. One estimator observation consumes two payoff evaluations. An equal-observation comparison treats each pair as one observation. An equal-path comparison gives the method the same total number of simulated paths as its competitors. Both conventions are reported in the empirical chapters.
+A negative within-pair correlation reduces variance. For a monotone payoff driven by Gaussian shocks, reversing every shock commonly produces this effect, although the size of the gain depends on the payoff and model. Antithetic sampling requires no training or pilot estimate and is consequently a low-setup benchmark \parencite{hammersley_morton_1956}. Its path cost must nevertheless be stated carefully: one antithetic estimator observation requires two payoff evaluations. The equal-observation comparison treats a pair average as one observation, whereas the equal-path comparison gives the method the same total number of simulated paths as its competitors.
 
 \section{Geometric Asian control variate}
 
-A control variate is a random quantity computed on the same path as the target payoff whose expectation is known. For arithmetic Asian pricing, the natural choice is the geometric Asian payoff. Define
+A control variate uses a random quantity that is related to the target payoff and has a known expectation. For the present problem, the natural classical control is the discounted payoff of a geometric Asian call generated from the same simulated path. Define
 \begin{align}
 G(\mathbf{Z}) &= \left(\prod_{j=1}^{m} S_j\right)^{1/m},
 \label{eq:geometric_average}\\
-g(\mathbf{Z}) &= e^{-rT}\max\bigl(G(\mathbf{Z})-K,\,0\bigr).
+g(\mathbf{Z}) &= e^{-rT} \max\bigl(G(\mathbf{Z}) - K, 0\bigr).
 \label{eq:geometric_payoff}
 \end{align}
-
-Under GBM with equally spaced dates, $\log G$ is normally distributed with mean and variance
+Under geometric Brownian motion, $\log G$ is normally distributed. With equally spaced monitoring dates, its mean and variance are
 \begin{align}
-\mu_G &= \log S_0 + \left(r-\tfrac{1}{2}\sigma^2\right)T\frac{m+1}{2m},
+\mu_G &= \log S_0 + \left(r - \tfrac{1}{2}\sigma^2\right)T\frac{m + 1}{2m},
 \label{eq:mu_g}\\
-\nu_G^2 &= \sigma^2T\frac{(m+1)(2m+1)}{6m^2}.
+\nu_G^2 &= \sigma^2 T \frac{(m + 1)(2m + 1)}{6m^2}.
 \label{eq:nu_g}
 \end{align}
-
-The analytical price of the geometric Asian call follows from the lognormal call formula:
+The analytical expectation of the discounted geometric payoff is therefore obtained from the lognormal call formula
 \begin{align}
-\theta_G &= e^{-rT}\left[\exp\left(\mu_G+\tfrac{1}{2}\nu_G^2\right)\Phi(d_1)-K\Phi(d_2)\right],
+\theta_G &= e^{-rT}\left\{\exp\left(\mu_G + \tfrac{1}{2}\nu_G^2\right) \Phi(d_1) - K\Phi(d_2)\right\},
 \label{eq:theta_g}\\
-d_1 &= \frac{\mu_G-\log K+\nu_G^2}{\nu_G},
-\label{eq:d1_g}\\
-d_2 &= d_1-\nu_G.
-\label{eq:d2_g}
+d_1 &= \frac{\mu_G - \log K + \nu_G^2}{\nu_G}, \qquad d_2 = d_1 - \nu_G.
+\label{eq:d1d2_g}
 \end{align}
-
-The control-variate observation is
+The geometric control-variate observation is
 \begin{equation}
-Y_{\mathrm{GCV}} = f(\mathbf{Z}) - \beta\left[g(\mathbf{Z})-\theta_G\right].
+Y_{\mathrm{GCV}} = f(\mathbf{Z}) - \beta\left[g(\mathbf{Z}) - \theta_G\right].
 \label{eq:gcv_observation}
 \end{equation}
+For any fixed coefficient $\beta$, the centred control has expectation zero and the estimator is unbiased. The variance-minimising population coefficient is $\beta^* = \mathrm{Cov}(f,g)/\mathrm{Var}(g)$. Substitution gives a residual variance of $\mathrm{Var}(f)\left[1 - \rho(f,g)^2\right]$, where $\rho(f,g)$ is the correlation between the two payoffs. The arithmetic and geometric averages are constructed from the same prices and are usually strongly related, which explains why this control is a demanding benchmark \parencite{kemna_vorst_1990}.
 
-For any fixed $\beta$, the centred control has expectation zero and the estimator is unbiased. The variance-minimising coefficient is $\beta^*=\mathrm{Cov}(f,g)/\mathrm{Var}(g)$, which yields a residual variance of $\mathrm{Var}(f)\left[1-\rho(f,g)^2\right]$. Since the arithmetic and geometric averages are computed from the same prices, they are typically strongly correlated, making this control unusually effective \parencite{kemna_vorst_1990}.
-
-In practice, $\beta^*$ is unknown and is estimated by ordinary least squares on an independent pilot sample. The estimate is frozen before final pricing begins. Because the pricing paths are independent of the pilot and the control is centred using its analytical expectation, the final estimator remains unbiased conditional on the pilot. In computational comparisons, pilot simulation is treated as a setup cost; when a fixed path budget is imposed, pilot paths are deducted from the paths available for pricing.
+The population coefficient is unknown and is estimated by ordinary least squares on an independent pilot sample. The resulting coefficient is frozen before final pricing. Conditional on the pilot estimate, the final estimator remains unbiased because the pricing paths are independent and the control is centred using its analytical expectation. This separation also prevents the final sample from being used both to tune and assess the estimator. In computational comparisons, pilot simulation and coefficient estimation are treated as setup costs; when a fixed total path budget is imposed, the pilot paths are deducted from the paths available for final pricing.
 
 \section{Neural control variate}
 
-The neural control variate replaces the geometric payoff with a learned function of the Gaussian input. A general neural network might approximate $f$ well, but it is not automatically a valid control: its expectation must also be known. Estimating that expectation by a second simulation would transfer rather than solve the integration problem. The architecture used here follows the analytically integrable construction of \textcite{el_filali_ech-chafiq_lelong_reghai_2021}. It has one hidden layer of rectified linear units (ReLUs) and a linear output:
+The neural control variate replaces the hand-selected geometric payoff with a function learned from simulated data. A general network may approximate $f$ well, but it is not automatically a valid control: its expectation must also be known. Estimating that expectation with another large simulation would transfer rather than solve the integration problem. The architecture used here follows the analytically integrable construction of \textcite{el_filali_ech-chafiq_lelong_reghai_2021}. It contains one hidden ReLU layer and a linear output:
 \begin{equation}
-H_{\theta}(\mathbf{Z}) = b_2 + \sum_{k=1}^{h} w_{2k}\,\max\!\bigl(\mathbf{w}_{1k}^\top \mathbf{Z} + b_{1k},\,0\bigr),
+H_{\theta}(\mathbf{Z}) = b_2 + \sum_{k=1}^{h} w_{2k} \max\bigl(\mathbf{w}_{1k}^\top \mathbf{Z} + b_{1k}, 0\bigr),
 \label{eq:shallow_network}
 \end{equation}
-where $h$ is the number of hidden units and $\theta$ collects all weights and biases. The shallow structure is a deliberate constraint: it is flexible enough to learn nonlinear functions of the path shocks while retaining an analytically computable expectation. Deeper architectures would generally destroy this tractability.
+where $h$ is the number of hidden units and $\theta$ denotes all weights and biases. The shallow structure is a deliberate constraint. It is flexible enough to learn nonlinear functions of the path shocks, while retaining an expectation that can be evaluated exactly. Deeper architectures would generally destroy this tractability.
 
 \subsection{Analytical network expectation}
 
-For hidden unit $k$, define the pre-activation $U_k = \mathbf{w}_{1k}^\top \mathbf{Z} + b_{1k}$. Since $\mathbf{Z}$ is standard normal, $U_k$ is univariate normal with mean $\mu_k=b_{1k}$ and variance $s_k^2 = \mathbf{w}_{1k}^\top \mathbf{w}_{1k}$. For a normal random variable $X$ with mean $\mu$ and standard deviation $s$, the expected positive part is
+For hidden unit $k$, define the pre-activation $U_k = \mathbf{w}_{1k}^\top \mathbf{Z} + b_{1k}$. Because $\mathbf{Z}$ is multivariate standard normal, $U_k$ is univariate normal with mean $\mu_k = b_{1k}$ and variance $s_k^2 = \mathbf{w}_{1k}^\top \mathbf{w}_{1k}$. If $X$ is normally distributed with mean $\mu$ and standard deviation $s$, the expected positive part is
 \begin{equation}
-\mathbb{E}[\max(X,0)] = s\,\phi(\mu/s) + \mu\,\Phi(\mu/s),
+\mathbb{E}[\max(X,0)] = s \, \phi(\mu/s) + \mu \, \Phi(\mu/s),
 \label{eq:relu_moment}
 \end{equation}
-where $\phi$ and $\Phi$ are the standard normal density and distribution function. Applying this to each hidden unit and using linearity of expectation gives
+where $\phi$ and $\Phi$ are the standard normal density and distribution functions. Applying \eqref{eq:relu_moment} to every hidden unit and using linearity of expectation gives
 \begin{equation}
-\mathbb{E}[H_{\theta}(\mathbf{Z})] = b_2 + \sum_{k=1}^{h} w_{2k}\left[s_k\,\phi(\mu_k/s_k)+\mu_k\,\Phi(\mu_k/s_k)\right].
+\mathbb{E}[H_{\theta}(\mathbf{Z})] = b_2 + \sum_{k=1}^{h} w_{2k}\left\{s_k \, \phi(\mu_k/s_k) + \mu_k \, \Phi(\mu_k/s_k)\right\}.
 \label{eq:network_expectation}
 \end{equation}
-
-The pre-activations of different hidden units may be correlated, but this does not matter: the output expectation is the weighted sum of individual unit expectations. Units with $s_k\approx 0$ are evaluated at the deterministic limit $\max(\mu_k,0)$. The full derivation of \eqref{eq:relu_moment} is in the appendix.
+Independence between hidden units is not required. Their pre-activations can be correlated because the expectation of the output is the weighted sum of their individual expectations. Numerically degenerate units with $s_k$ close to zero are evaluated using the limiting deterministic value $\max(\mu_k,0)$. The complete derivation of \eqref{eq:relu_moment} is placed in the appendix to keep the main argument focused.
 
 \subsection{Training and final estimator}
 
-The network is fitted on a training sample of payoff--input pairs. The objective is to minimise the empirical variance of $f(\mathbf{Z})-H_{\theta}(\mathbf{Z})$, not to predict a label in the usual supervised-learning sense. A separate validation sample monitors generalisation. Once training is complete, $\theta$ is frozen and no pricing-sample observations influence the network. This separation matters because a flexible control can overfit training noise, producing low in-sample loss but poor out-of-sample variance reduction \parencite{wan_zhong_xiong_zhu_2020}.
+The network is fitted on a training sample of Gaussian inputs and their discounted payoffs. The implemented objective is the mean squared error between $f(\mathbf{Z})$ and $H_{\theta}(\mathbf{Z})$. This encourages the network to approximate the payoff, but it is not identical to minimising the variance of the final control-variate observation because centring and, where used, the coefficient $\beta$ also affect the residual. Training loss is therefore reported separately from out-of-sample residual variance. An independent validation sample is used to compare training checkpoints, after which $\theta$ is frozen. No observation from the final pricing sample influences the network weights, checkpoint selection or control coefficient. This separation is important because a low in-sample loss can overstate variance reduction when a flexible control has adapted to training noise \parencite{wan_zhong_xiong_zhu_2020}.
 
-With frozen parameters, the neural control-variate observation is
+For a frozen network, the neural control-variate observation is
 \begin{equation}
-Y_{\mathrm{NCV}} = f(\mathbf{Z}) - \beta\left[H_{\theta}(\mathbf{Z})-\mathbb{E}[H_{\theta}(\mathbf{Z})]\right].
+Y_{\mathrm{NCV}} = f(\mathbf{Z}) - \beta\left[H_{\theta}(\mathbf{Z}) - \mathbb{E}(H_{\theta}(\mathbf{Z}))\right].
 \label{eq:ncv_observation}
 \end{equation}
+The pricing estimator is the average of independent copies of \eqref{eq:ncv_observation}. It is unbiased for any coefficient $\beta$ that is fixed independently of the pricing sample. Contract-specific NCV trains $\theta$ for the target contract and estimates $\beta$ from a disjoint pilot sample. The same pilot logic used for GCV therefore applies. A fixed value $\beta = 1$ is also informative because it tests the network as the direct approximation learned during training, without target-sample rescaling.
 
-The pricing estimator averages independent copies of \eqref{eq:ncv_observation}. It is unbiased for any $\beta$ fixed independently of the pricing sample. In contract-specific NCV, both $\theta$ and $\beta$ are fitted to the target contract: $\theta$ by training, $\beta$ by OLS on a disjoint pilot sample (the same logic as for GCV). Setting $\beta=1$ tests the network as trained, without target-sample rescaling.
+For cross-contract reuse, let $\lambda_0$ denote the reference contract and $\lambda$ a target contract. The network $\theta_0$ trained at $\lambda_0$ is held fixed while the target payoff is evaluated. Frozen beta-one reuse sets $\beta = 1$ and incurs no target-specific pilot. Frozen estimated-beta reuse uses a small independent target pilot to estimate the optimal linear coefficient between the target payoff and $H_{\theta_0}$. The second method can correct a change in scale when the learned output remains informative, but cannot recreate payoff features absent from the frozen representation. Reuse is conducted within each monitoring profile because the 12- and 252-date networks have different input dimensions.
 
-Cross-contract reuse freezes the network $\theta_0$ trained on a reference contract and applies it to a different target contract. Two variants are considered:
-\begin{itemize}
-    \item \textbf{Frozen $\beta=1$:} the reference network is applied directly with no target-specific estimation, incurring no pilot cost.
-    \item \textbf{Frozen estimated $\beta$:} a small independent target pilot estimates the optimal linear coefficient between the target payoff and $H_{\theta_0}$. This can correct for changes in scale when the learned output remains informative, but cannot recover structure the network never learned.
-\end{itemize}
-Reuse is examined within each monitoring profile because the $m=12$ and $m=252$ networks have different input dimensions.
+\section{Measures of estimator efficiency}
 
-\section{Efficiency measures}
-
-The empirical comparison separates statistical performance from computational cost.
-
-\subsection{Statistical measures}
-
-The primary measure is the variance-reduction factor:
+The empirical comparison separates statistical performance from computational cost. For method $M$, the principal statistical measure is the variance-reduction factor
 \begin{equation}
 \mathrm{VRF}_M = \frac{\mathrm{Var}(\hat{V}_{\mathrm{MC}})}{\mathrm{Var}(\hat{V}_M)}.
 \label{eq:vrf}
 \end{equation}
-A value above one indicates lower sampling variance than MC under the stated observation convention. Complementary measures include bias relative to a reference price, root mean squared error, standard error and confidence-interval width. Variance reduction alone is not treated as sufficient evidence, because an estimator can have low variance but introduce finite-sample bias from implementation or numerical error.
+A value above one indicates a lower sampling variance than standard Monte Carlo under the stated observation convention. Replication-level estimates are also compared using bias relative to the reference price, root mean squared error, standard error and confidence-interval width. Because an estimator can have low variance but a small finite-sample bias from implementation or numerical error, variance reduction is not treated as sufficient evidence on its own.
 
-\subsection{Computational measures}
-
-Computational accounting separates setup cost $S_M$ from marginal pricing cost $M_M$. MC and AV have zero model-training setup. GCV setup consists of the pilot. Scratch NCV includes training-data generation and optimiser time. Frozen reuse includes the shared reference training and, for estimated-$\beta$ reuse, a target-specific pilot. For $Q$ valuations, total cost is
+Computational accounting distinguishes the setup cost $S_M$ from the marginal pricing cost $M_M$. Standard Monte Carlo and antithetic variates have zero model-training setup. GCV setup consists of the target pilot. A scratch NCV includes training-data generation and optimiser time, while frozen reuse includes the shared reference training cost and, for estimated-beta reuse, a target-specific pilot. For $Q$ valuations, total measured cost is represented as
 \begin{equation}
-C_M(Q)=S_M + Q\,M_M.
+C_M(Q) = S_M + Q M_M.
 \label{eq:total_cost}
 \end{equation}
-When method A has higher setup but lower marginal cost than method B, the break-even point is
-\begin{equation}
-Q^* = \frac{S_A-S_B}{M_B-M_A}.
-\label{eq:break_even}
-\end{equation}
-The reported value is the smallest integer $Q$ at which A is no more expensive. If A has both higher setup and no lower marginal cost, no finite break-even exists.
+When method A has a larger setup cost but lower marginal cost than method B, the continuous break-even point is $[S_A - S_B]/[M_B - M_A]$. The reported value is the smallest integer $Q$ at which A is no more expensive, with the $Q = 1$ boundary checked explicitly. If A has both greater setup and no lower marginal cost, no finite break-even exists. Shared training is counted once when reuse is evaluated across a sequence of target contracts.
 
-\subsection{Comparison conventions}
+Three complementary comparisons are reported. Equal-observation results isolate variance reduction for a fixed number of estimator observations. The path-budget comparison applies the method-specific allocations set out in Chapter~4: pilot paths are deducted where required, whereas NCV training is retained as a separately reported setup cost. It should therefore not be interpreted as equalising total computational work. Matched-accuracy results estimate the path count and runtime required for each method to attain the precision of the baseline. Antithetic results identify both pair counts and total paths. Together, these measures prevent a variance gain from being presented as a computational gain when it is offset by training, pilot estimation or network-evaluation cost.
 
-Three conventions are reported to prevent a variance gain from being mistaken for a computational gain:
-\begin{enumerate}
-    \item \textbf{Equal-observation:} fixes the number of estimator observations, isolating variance reduction.
-    \item \textbf{Equal-budget:} imposes a common simulated-path allowance, deducting pilot paths.
-    \item \textbf{Matched-accuracy:} estimates the path count and runtime each method needs to attain the baseline's precision.
-\end{enumerate}
-For antithetic variates, both pair counts and total path counts are identified.
+\section{Methodological summary}
 
-\section{Summary}
-
-All four estimators target the same risk-neutral expectation. MC averages the discounted payoff directly. AV modifies the sampling scheme. GCV subtracts a centred geometric payoff whose price is known analytically. NCV subtracts a learned shallow network whose expectation is computed from normal positive-part moments. Independent training, pilot, validation and pricing samples preserve the interpretation of the final estimates. Chapter~4 converts these definitions into the two-stage experimental design.
+All four estimators target the same risk-neutral expectation. MC averages the discounted arithmetic payoff directly. AV changes the Gaussian sampling scheme. GCV subtracts a centred geometric payoff with an exact option value, while NCV subtracts a learned shallow network whose expectation is available from normal positive-part moments. Independent training, pilot, validation and pricing samples preserve the interpretation of the final estimates. The next chapter converts these definitions into the two-stage experimental design, specifying the contracts, path allocations, training policy, replications and timing procedure.
