@@ -1,0 +1,6 @@
+config_id,hidden_width,train_paths,selected_checkpoint,selection_metric,tie_break_rule,per_replication_validation_optimal_checkpoints,checkpoint_grid
+w32_n100,32,100,2,mean_validation_centered_residual_variance,earlier_checkpoint,rep0:2|rep1:2,0|1|2
+w16_n100,16,100,2,mean_validation_centered_residual_variance,earlier_checkpoint,rep0:2|rep1:2,0|1|2
+w8_n100,8,100,2,mean_validation_centered_residual_variance,earlier_checkpoint,rep0:2|rep1:2,0|1|2
+w32_n200,32,200,2,mean_validation_centered_residual_variance,earlier_checkpoint,rep0:2|rep1:2,0|1|2
+w32_n400,32,400,2,mean_validation_centered_residual_variance,earlier_checkpoint,rep0:2|rep1:2,0|1|2

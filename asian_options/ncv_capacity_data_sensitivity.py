@@ -474,7 +474,8 @@ def _selected_checkpoints(per_replication_rows: list[dict[str, Any]], config: Ca
             by_cp.setdefault(cp, []).append(float(row["centered_residual_variance"]))
 
         cp_summary: list[tuple[int, float]] = []
-        for cp in checkpoints_sorted := sorted(by_cp.keys()):
+        checkpoints_sorted = sorted(by_cp.keys())
+        for cp in checkpoints_sorted:
             vals = [x for x in by_cp[cp] if math.isfinite(x)]
             if vals:
                 cp_summary.append((cp, float(statistics.mean(vals))))
@@ -866,10 +867,21 @@ def _build_handover(
             return f"{v:.6g}" if math.isfinite(v) else "NA"
         return str(v)
 
-    width16_vs_32 = _find_metric("w16_n5000_vs_w32_n5000", "paired_log_ratio_test_residual_variance")
-    width8_vs_32 = _find_metric("w8_n5000_vs_w32_n5000", "paired_log_ratio_test_residual_variance")
-    data10_vs_5 = _find_metric("w32_n10000_vs_w32_n5000", "paired_log_ratio_test_residual_variance")
-    data20_vs_5 = _find_metric("w32_n20000_vs_w32_n5000", "paired_log_ratio_test_residual_variance")
+    if config.profile == "smoke":
+        width16_id = "w16_n100_vs_w32_n100"
+        width8_id = "w8_n100_vs_w32_n100"
+        data10_id = "w32_n200_vs_w32_n100"
+        data20_id = "w32_n400_vs_w32_n100"
+    else:
+        width16_id = "w16_n5000_vs_w32_n5000"
+        width8_id = "w8_n5000_vs_w32_n5000"
+        data10_id = "w32_n10000_vs_w32_n5000"
+        data20_id = "w32_n20000_vs_w32_n5000"
+
+    width16_vs_32 = _find_metric(width16_id, "paired_log_ratio_test_residual_variance")
+    width8_vs_32 = _find_metric(width8_id, "paired_log_ratio_test_residual_variance")
+    data10_vs_5 = _find_metric(data10_id, "paired_log_ratio_test_residual_variance")
+    data20_vs_5 = _find_metric(data20_id, "paired_log_ratio_test_residual_variance")
 
     lines: list[str] = []
     lines.append("# NCV Capacity-vs-Data Sensitivity Handover")
@@ -887,13 +899,13 @@ def _build_handover(
     lines.append("## Sensitivity conclusions (descriptive)")
     lines.append(
         "- Whether reducing width improved held-out performance: "
-        f"w16 vs w32 log residual-variance ratio mean={_fmt(width16_vs_32.get('mean'))}; "
-        f"w8 vs w32 mean={_fmt(width8_vs_32.get('mean'))}."
+        f"{width16_id} mean={_fmt(width16_vs_32.get('mean'))}; "
+        f"{width8_id} mean={_fmt(width8_vs_32.get('mean'))}."
     )
     lines.append(
         "- Whether increasing training data improved held-out performance: "
-        f"w32 n10000 vs n5000 mean={_fmt(data10_vs_5.get('mean'))}; "
-        f"w32 n20000 vs n5000 mean={_fmt(data20_vs_5.get('mean'))}."
+        f"{data10_id} mean={_fmt(data10_vs_5.get('mean'))}; "
+        f"{data20_id} mean={_fmt(data20_vs_5.get('mean'))}."
     )
     lines.append("- Whether the generalisation gap narrowed: see paired metric `paired_difference_log_generalization_gap` in capacity_data_paired_contrasts.csv.")
     lines.append("- Consistency across replications: inspect 95% CIs and medians in capacity_data_paired_contrasts.csv.")
@@ -1187,7 +1199,7 @@ def run_capacity_data_sensitivity(config: CapacityDataConfig) -> Path:
     (run_dir / "CAPACITY_DATA_HANDOVER.md").write_text(handover, encoding="utf-8")
 
     final_report = _validate_outputs(run_dir, diagnostics)
-    final_report["warnings"].extend(preliminary.get("warnings", []))
+    final_report["warnings"] = sorted(set(final_report["warnings"]).union(preliminary.get("warnings", [])))
     _write_json(run_dir / "capacity_data_validation_report.json", final_report)
 
     return run_dir
