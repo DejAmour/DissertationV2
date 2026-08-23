@@ -1,0 +1,67 @@
+{
+  "profile": "dissertation",
+  "base_seed": 42,
+  "replications": 10,
+  "monitoring_dates": 252,
+  "validation_paths": 10000,
+  "test_paths": 50000,
+  "pilot_paths": 1000,
+  "checkpoints": [
+    0,
+    10,
+    25,
+    50,
+    100,
+    200
+  ],
+  "learning_rate": 0.01,
+  "train_batch_size": 256,
+  "pricing_observations_for_reporting": 50000,
+  "cells": [
+    {
+      "config_id": "w32_n5000",
+      "hidden_width": 32,
+      "train_paths": 5000
+    },
+    {
+      "config_id": "w16_n5000",
+      "hidden_width": 16,
+      "train_paths": 5000
+    },
+    {
+      "config_id": "w8_n5000",
+      "hidden_width": 8,
+      "train_paths": 5000
+    },
+    {
+      "config_id": "w32_n10000",
+      "hidden_width": 32,
+      "train_paths": 10000
+    },
+    {
+      "config_id": "w32_n20000",
+      "hidden_width": 32,
+      "train_paths": 20000
+    }
+  ],
+  "output_dir": "experiment_runs",
+  "contract": {
+    "S0": 100.0,
+    "K": 100.0,
+    "r": 0.05,
+    "sigma": 0.2,
+    "T": 1.0
+  },
+  "risk_neutral_simulation": "existing_gbm_simulate_paths",
+  "architecture": "one_hidden_layer_relu_linear_output",
+  "optimizer": "adam",
+  "objective": "mse",
+  "seed_offsets": {
+    "train": 1000,
+    "validation": 2000,
+    "test": 3000,
+    "pilot": 4000,
+    "init": 5000
+  },
+  "created_at_utc": "20260822T205712Z"
+}

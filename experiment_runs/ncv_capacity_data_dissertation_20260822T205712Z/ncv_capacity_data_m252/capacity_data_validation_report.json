@@ -1,0 +1,55 @@
+{
+  "required_files": [
+    "capacity_data_config.json",
+    "capacity_data_environment.json",
+    "capacity_data_seed_manifest.csv",
+    "capacity_data_per_replication.csv",
+    "capacity_data_checkpoint_summary.csv",
+    "capacity_data_selected_checkpoints.csv",
+    "capacity_data_paired_contrasts.csv",
+    "capacity_data_runtime_summary.csv",
+    "capacity_data_gcv_benchmark.csv",
+    "capacity_data_validation_report.json",
+    "CAPACITY_DATA_HANDOVER.md",
+    "ncv_capacity_data_summary.png"
+  ],
+  "exists": {
+    "capacity_data_config.json": true,
+    "capacity_data_environment.json": true,
+    "capacity_data_seed_manifest.csv": true,
+    "capacity_data_per_replication.csv": true,
+    "capacity_data_checkpoint_summary.csv": true,
+    "capacity_data_selected_checkpoints.csv": true,
+    "capacity_data_paired_contrasts.csv": true,
+    "capacity_data_runtime_summary.csv": true,
+    "capacity_data_gcv_benchmark.csv": true,
+    "capacity_data_validation_report.json": true,
+    "CAPACITY_DATA_HANDOVER.md": true,
+    "ncv_capacity_data_summary.png": true
+  },
+  "errors": [],
+  "warnings": [
+    "extension_recommended_true"
+  ],
+  "passed": true,
+  "profile": "dissertation",
+  "replications": 10,
+  "n_configurations": 5,
+  "checkpoint_grid": [
+    0,
+    10,
+    25,
+    50,
+    100,
+    200
+  ],
+  "checkpoint_grid_starts_at_zero": true,
+  "checkpoint_grid_strictly_increasing": true,
+  "training_nested_prefix_all_ok": true,
+  "seed_streams_unique_within_replication": true,
+  "seed_generation_uses_builtin_hash": false,
+  "extension_recommended": true,
+  "row_count_per_replication": 90,
+  "expected_per_replication_rows": 90,
+  "row_count_matches_expectation": true
+}
