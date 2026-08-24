@@ -762,3 +762,140 @@ def test_stage8_m12_override_metadata_consistency(tmp_path):
     assert stable_rows and all(int(r["monitoring_dates"]) == 12 for r in stable_rows)
     assert all(int(r["fixed_ncv_epoch"]) == 1000 for r in stable_rows)
     assert role in handover
+
+
+def test_stage8_profiles_include_new_m252_n20000_and_keep_existing_defaults():
+    dissertation = s8.PROFILES["dissertation"]
+    assert dissertation["n_training"] == 5_000
+    assert dissertation["n_pilot"] == 1_000
+    assert dissertation["n_pricing"] == 50_000
+    assert dissertation["n_replications"] == 30
+
+    expanded = s8.PROFILES["m252_n20000"]
+    assert expanded["monitoring_dates"] == 252
+    assert expanded["n_training"] == 20_000
+    assert expanded["n_validation"] == 10_000
+    assert expanded["n_pilot"] == 1_000
+    assert expanded["n_pricing"] == 50_000
+    assert expanded["n_replications"] == 5
+    assert expanded["ncv_epoch"] == 200
+
+
+def test_m252_width32_trainable_parameter_count():
+    assert s8._trainable_parameter_count(252, 32) == 8_129
+
+
+def test_equal_budget_allocation_is_dynamic_for_20000_training_paths():
+    alloc = s8._equal_budget_allocation("NCV_SCRATCH", B=50_000, Q=1, n_training=20_000, n_pilot=1_000)
+    assert alloc["pricing_observations"] == 30_000
+    assert alloc["pricing_simulated_paths"] == 30_000
+    assert alloc["total_paths_used"] == 50_000
+
+
+def test_replication_seeds_are_distinct_across_streams():
+    seeds = s8._replication_seeds(base_seed=42, replication=0)
+    values = list(seeds.values())
+    assert len(values) == len(set(values))
+    assert seeds["ref_train"] != seeds["ref_val"]
+    assert seeds["ref_train"] != seeds["pricing_reference"]
+    assert seeds["pilot_reference"] != seeds["pricing_reference"]
+    assert seeds["target_train_reference"] != seeds["pricing_reference"]
+
+
+def test_unique_run_dir_prevents_overwrite(tmp_path):
+    d1 = s8._ensure_unique_run_dir(tmp_path, "stage8_m252_n20000_r5")
+    d2 = s8._ensure_unique_run_dir(tmp_path, "stage8_m252_n20000_r5")
+    assert d1 != d2
+    assert d1.exists()
+    assert d2.exists()
+    assert d2.name.startswith("stage8_m252_n20000_r5_")
+
+
+def test_expected_contract_method_grid_is_complete():
+    rows = s8._expected_method_rows_per_replication()
+    assert len(rows) == 40
+    by_contract = {}
+    for cid, method in rows:
+        by_contract.setdefault(cid, set()).add(method)
+    for cid in CONTRACT_IDS:
+        expected = set(s8.BASE_METHODS)
+        if cid in TARGET_IDS:
+            expected |= set(s8.TRANSFER_METHODS)
+        assert by_contract[cid] == expected
+
+
+def test_reporting_modes_reuse_replication_outputs_without_extra_retraining(monkeypatch, tmp_path):
+    call_reps = []
+
+    def _fake_high_precision(n_paths, base_seed, monitoring_dates):
+        return [
+            {
+                "contract_id": cid,
+                "price": 1.0,
+                "std_error": 0.1,
+                "ci_lower": 0.8,
+                "ci_upper": 1.2,
+                "n_paths": n_paths,
+                "method": "GCV_high_precision",
+                "seed": base_seed + i,
+                "monitoring_dates": monitoring_dates,
+                "error": "",
+            }
+            for i, cid in enumerate(CONTRACT_IDS)
+        ]
+
+    def _fake_run_replication(
+        base_seed,
+        replication,
+        n_training,
+        n_pilot,
+        n_pricing,
+        torch_available,
+        monitoring_dates,
+        ncv_epoch,
+        ncv_epoch_source,
+        experiment_role,
+    ):
+        call_reps.append(replication)
+        per_rep = _fixture_rows(1)
+        for row in per_rep:
+            row["replication"] = replication
+            row["monitoring_dates"] = monitoring_dates
+            row["experiment_role"] = experiment_role
+            if str(row["method"]).startswith("NCV"):
+                row["ncv_epoch"] = ncv_epoch
+                row["ncv_epoch_source"] = ncv_epoch_source
+        beta_rows = []
+        for row in per_rep:
+            if row["method"] in s8.TRANSFER_METHODS:
+                beta_rows.append(
+                    {
+                        "base_seed": base_seed,
+                        "replication": replication,
+                        "contract_id": row["contract_id"],
+                        "method": row["method"],
+                        "estimated_beta": 1.0 if row["method"] == "NCV_TRANSFER_BETA1" else 0.9,
+                        "payoff_control_correlation": 0.5,
+                        "variance_improvement_from_estimating_beta": 1.1,
+                        "error": "",
+                    }
+                )
+        shared = {
+            "base_seed": base_seed,
+            "replication": replication,
+            "training_paths": n_training,
+            "training_runtime_s": 1.0,
+            "analytical_e_h0": 0.0,
+            "frozen_parameter_hash": "x",
+            "hash_verification_result": True,
+            "error": "",
+        }
+        return per_rep, beta_rows, [], shared
+
+    monkeypatch.setattr(s8, "_warmup_numpy_and_torch", lambda torch_available: None)
+    monkeypatch.setattr(s8, "compute_all_high_precision_references", _fake_high_precision)
+    monkeypatch.setattr(s8, "run_replication", _fake_run_replication)
+
+    run_dir = s8.run_stage8(profile="smoke", base_seed=7, output_dir=str(tmp_path), n_replications_override=3)
+    assert run_dir.exists()
+    assert call_reps == [0, 1, 2]

@@ -37,12 +37,31 @@ PROFILES = {
     },
     "dissertation": {
         "n_training": 5_000,
+        "n_validation": 10_000,
         "n_pilot": 1_000,
         "n_pricing": 50_000,
         "n_replications": 30,
         "n_high_precision": 500_000,
         "amortised_q_values": [1, 5, 10, 25, 50, 100, 250, 500, 1000],
+        "requires_torch": True,
         "description": "Dissertation: standard sizes, 30 reps, full analyses",
+    },
+    "m252_n20000": {
+        "n_training": 20_000,
+        "n_validation": 10_000,
+        "n_pilot": 1_000,
+        "n_pricing": 50_000,
+        "n_replications": 5,
+        "n_high_precision": 500_000,
+        "amortised_q_values": [1, 5, 10, 25, 50, 100, 250, 500, 1000],
+        "monitoring_dates": 252,
+        "ncv_epoch": 200,
+        "ncv_epoch_source": "capacity_and_data_sensitivity_best_tested_configuration",
+        "run_stem": "stage8_m252_n20000_r5",
+        "experiment_role": "expanded_training_followup_stage8_m252_n20000_r5",
+        "follow_up_label": "five_replication_expanded_training_follow_up_best_tested_configuration_from_capacity_and_data_sensitivity_analysis",
+        "requires_torch": True,
+        "description": "Expanded-training follow-up: m=252, 20k NCV training paths, 5 reps",
     },
 }
 
@@ -58,6 +77,7 @@ TRANSFER_METHODS = ("NCV_TRANSFER_BETA1", "NCV_TRANSFER_BETA")
 STAGE8_FIXED_NCV_EPOCH = 25
 STAGE8_NCV_EPOCH_SOURCE = "training_curve_validation_tuning"
 STAGE8_EXPERIMENT_ROLE = "primary_stage8_final_evaluation"
+STAGE8_HIDDEN_WIDTH = 32
 FINAL_EVALUATION_SEED_NAMESPACE_OFFSET = 10_000_000
 
 
@@ -74,6 +94,10 @@ def _replication_seeds(base_seed: int, replication: int) -> dict:
         out[f"pilot_{cid}"] = s + SEED_OFFSET_PILOT + ci * 100
         out[f"pricing_{cid}"] = s + SEED_OFFSET_PRICING + ci * 100
     return out
+
+
+def _trainable_parameter_count(monitoring_dates: int, hidden_width: int = STAGE8_HIDDEN_WIDTH) -> int:
+    return (monitoring_dates * hidden_width) + hidden_width + hidden_width + 1
 
 
 def _try_import_torch() -> bool:
@@ -212,7 +236,7 @@ def _run_ncv_scratch(
 
     t_opt = time.perf_counter()
     dataset = {"X_train": z_train, "y_train": train_payoffs}
-    network = build_network(train_cfg, hidden_width=32)
+    network = build_network(train_cfg, hidden_width=STAGE8_HIDDEN_WIDTH)
     train_network(network, dataset, train_cfg, n_epochs=ncv_epoch)
     optimizer_runtime = time.perf_counter() - t_opt
     train_runtime = data_generation_runtime + optimizer_runtime
@@ -350,6 +374,7 @@ def run_replication(
                 ref_cfg,
                 n_training=n_training,
                 train_seed=seeds["ref_train"],
+                hidden_width=STAGE8_HIDDEN_WIDTH,
                 n_epochs=ncv_epoch,
             )
             shared_training_row.update(
@@ -1222,6 +1247,8 @@ def compute_equal_pricing_observations_summary(
     aggregate_rows: List[dict],
     variance_ratio_summary: List[dict],
     n_training: int,
+    n_pilot: int,
+    n_pricing: int,
 ) -> List[dict]:
     agg = {(r["contract_id"], r["method"]): r for r in aggregate_rows}
     vrr = {(r["contract_id"], r["method"], r["comparator"]): r for r in variance_ratio_summary}
@@ -1238,34 +1265,34 @@ def compute_equal_pricing_observations_summary(
             shared_paths = n_training if method in TRANSFER_METHODS else 0
 
             if method == "MC":
-                pricing_obs = pricing_obs if pricing_obs != "NA" else 50_000
+                pricing_obs = pricing_obs if pricing_obs != "NA" else n_pricing
                 pricing_sim = pricing_sim if pricing_sim != "NA" else pricing_obs
                 pilot_paths = 0
                 target_training_paths = 0
             elif method == "AV":
-                pricing_obs = pricing_obs if pricing_obs != "NA" else 50_000
+                pricing_obs = pricing_obs if pricing_obs != "NA" else n_pricing
                 pricing_sim = pricing_sim if pricing_sim != "NA" else 2 * pricing_obs
                 pilot_paths = 0
                 target_training_paths = 0
             elif method == "GCV":
-                pilot_paths = pilot_paths if pilot_paths else 1000
-                pricing_obs = pricing_obs if pricing_obs != "NA" else 50_000
+                pilot_paths = pilot_paths if pilot_paths else n_pilot
+                pricing_obs = pricing_obs if pricing_obs != "NA" else n_pricing
                 pricing_sim = pricing_sim if pricing_sim != "NA" else pricing_obs
                 target_training_paths = 0
             elif method == "NCV_SCRATCH":
                 target_training_paths = target_training_paths if target_training_paths else n_training
-                pricing_obs = pricing_obs if pricing_obs != "NA" else 50_000
+                pricing_obs = pricing_obs if pricing_obs != "NA" else n_pricing
                 pricing_sim = pricing_sim if pricing_sim != "NA" else pricing_obs
                 pilot_paths = 0
             elif method == "NCV_TRANSFER_BETA1":
                 target_training_paths = 0
                 pilot_paths = 0
-                pricing_obs = pricing_obs if pricing_obs != "NA" else 50_000
+                pricing_obs = pricing_obs if pricing_obs != "NA" else n_pricing
                 pricing_sim = pricing_sim if pricing_sim != "NA" else pricing_obs
             elif method == "NCV_TRANSFER_BETA":
                 target_training_paths = 0
-                pilot_paths = pilot_paths if pilot_paths else 1000
-                pricing_obs = pricing_obs if pricing_obs != "NA" else 50_000
+                pilot_paths = pilot_paths if pilot_paths else n_pilot
+                pricing_obs = pricing_obs if pricing_obs != "NA" else n_pricing
                 pricing_sim = pricing_sim if pricing_sim != "NA" else pricing_obs
 
             total_standalone = (pricing_sim if isinstance(pricing_sim, (int, float)) else 0) + (
@@ -1273,6 +1300,10 @@ def compute_equal_pricing_observations_summary(
             ) + (
                 target_training_paths if isinstance(target_training_paths, (int, float)) else 0
             ) + shared_paths
+            independent_random_vectors_pricing = (
+                pricing_obs if isinstance(pricing_obs, (int, float)) else "NA"
+            )
+            payoff_evaluations_pricing = pricing_sim if isinstance(pricing_sim, (int, float)) else "NA"
 
             rows.append(
                 {
@@ -1282,7 +1313,10 @@ def compute_equal_pricing_observations_summary(
                     "pricing_simulated_paths": pricing_sim,
                     "training_paths": target_training_paths,
                     "pilot_paths": pilot_paths,
+                    "validation_paths": 0,
                     "one_time_shared_paths": shared_paths,
+                    "independent_random_vectors_pricing": independent_random_vectors_pricing,
+                    "payoff_evaluations_pricing": payoff_evaluations_pricing,
                     "total_paths_one_standalone_valuation": total_standalone,
                     "observation_variance": r.get("mean_observation_variance", "NA"),
                     "estimator_variance": r.get("mean_estimator_variance", "NA"),
@@ -1526,6 +1560,9 @@ def _equal_budget_allocation(method: str, B: int, Q: int, n_training: int, n_pil
         n = math.floor(available_for_pricing / (Q * paths_per_obs))
     sim = n * paths_per_obs if n >= 0 else -1
     total = setup_paths_once + (Q * sim if sim >= 0 else 0)
+    pricing_random_vectors_per_valuation = n
+    total_random_vectors = setup_paths_once + (Q * n if n >= 0 else 0)
+    total_payoff_evaluations = setup_paths_once + (Q * sim if sim >= 0 else 0)
     feasible = n >= 2
     budget_ok = bool(feasible and total <= total_budget_paths)
     if not feasible:
@@ -1548,6 +1585,14 @@ def _equal_budget_allocation(method: str, B: int, Q: int, n_training: int, n_pil
         "shared_paths": shared_paths,
         "setup_paths_counted_once": setup_paths_once,
         "paths_per_pricing_observation": paths_per_obs,
+        "pricing_independent_random_vectors_per_valuation": (
+            pricing_random_vectors_per_valuation if feasible else "NA"
+        ),
+        "setup_independent_random_vectors_counted_once": setup_paths_once,
+        "total_independent_random_vectors": total_random_vectors if feasible else "NA",
+        "pricing_payoff_evaluations_per_valuation": sim if feasible else "NA",
+        "total_payoff_evaluations": total_payoff_evaluations if feasible else "NA",
+        "validation_paths": 0,
         "total_paths_used": total if feasible else "NA",
         "feasible": feasible and budget_ok,
         "failure_reason": reason,
@@ -2368,6 +2413,7 @@ def run_stage8(
 ) -> Path:
     profile_cfg = PROFILES[profile]
     n_training = profile_cfg["n_training"]
+    n_validation = profile_cfg.get("n_validation", 0)
     n_pilot = profile_cfg["n_pilot"]
     n_pricing = profile_cfg["n_pricing"]
     n_replications = n_replications_override or profile_cfg["n_replications"]
@@ -2375,18 +2421,30 @@ def run_stage8(
     amortised_q_values = profile_cfg["amortised_q_values"]
 
     default_monitoring_dates = make_contract_cfg(REFERENCE_ID, n_paths=2, seed=0).m
-    effective_monitoring_dates = monitoring_dates if monitoring_dates is not None else default_monitoring_dates
-    effective_ncv_epoch = ncv_epoch if ncv_epoch is not None else STAGE8_FIXED_NCV_EPOCH
-    effective_ncv_epoch_source = ncv_epoch_source or STAGE8_NCV_EPOCH_SOURCE
+    effective_monitoring_dates = (
+        monitoring_dates
+        if monitoring_dates is not None
+        else int(profile_cfg.get("monitoring_dates", default_monitoring_dates))
+    )
+    effective_ncv_epoch = ncv_epoch if ncv_epoch is not None else int(profile_cfg.get("ncv_epoch", STAGE8_FIXED_NCV_EPOCH))
+    effective_ncv_epoch_source = ncv_epoch_source or str(profile_cfg.get("ncv_epoch_source", STAGE8_NCV_EPOCH_SOURCE))
+    effective_experiment_role = (
+        str(profile_cfg.get("experiment_role"))
+        if experiment_role == STAGE8_EXPERIMENT_ROLE and profile_cfg.get("experiment_role")
+        else experiment_role
+    )
+    profile_requires_torch = bool(profile_cfg.get("requires_torch", False))
+    follow_up_label = str(profile_cfg.get("follow_up_label", ""))
 
     torch_available = _try_import_torch()
-    if profile == "dissertation" and not torch_available:
-        raise RuntimeError("Dissertation profile requires PyTorch; torch is unavailable. Exiting with non-zero status.")
+    if profile_requires_torch and not torch_available:
+        raise RuntimeError(f"{profile} profile requires PyTorch; torch is unavailable. Exiting with non-zero status.")
 
     _warmup_numpy_and_torch(torch_available)
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_dir = _ensure_unique_run_dir(Path(output_dir), f"stage8_{profile}_{ts}")
+    run_stem = str(profile_cfg.get("run_stem", f"stage8_{profile}"))
+    run_dir = _ensure_unique_run_dir(Path(output_dir), f"{run_stem}_{ts}")
 
     print(f"\n=== Stage 8: {profile_cfg['description']} ===")
     print(f"Output dir: {run_dir}")
@@ -2400,16 +2458,21 @@ def run_stage8(
         "profile": profile,
         "base_seed": base_seed,
         "n_replications": n_replications,
+        "profile_replications_default": profile_cfg["n_replications"],
         "n_training": n_training,
+        "n_validation": n_validation,
         "n_pilot": n_pilot,
         "n_pricing": n_pricing,
         "total_path_budget": n_pricing,
         "amortised_q_values": amortised_q_values,
         "n_high_precision": n_high_prec,
         "monitoring_dates": effective_monitoring_dates,
+        "hidden_width": STAGE8_HIDDEN_WIDTH,
+        "trainable_parameters": _trainable_parameter_count(effective_monitoring_dates, STAGE8_HIDDEN_WIDTH),
         "fixed_ncv_epoch": effective_ncv_epoch,
         "ncv_epoch_source": effective_ncv_epoch_source,
-        "experiment_role": experiment_role,
+        "experiment_role": effective_experiment_role,
+        "follow_up_label": follow_up_label,
         "sensitivity_scope_description": (
             "joint monitoring-frequency/input-dimensionality sensitivity"
             if effective_monitoring_dates != default_monitoring_dates
@@ -2442,10 +2505,10 @@ def run_stage8(
     env_meta["cpu_count"] = os.cpu_count()
     env_meta["platform"] = platform.platform()
     env_warnings: List[str] = []
-    if profile == "dissertation" and not bool(env_meta.get("virtual_environment_active", False)):
-        env_warnings.append("dissertation_profile_running_outside_virtual_environment")
+    if profile_requires_torch and not bool(env_meta.get("virtual_environment_active", False)):
+        env_warnings.append(f"{profile}_profile_running_outside_virtual_environment")
         print(
-            "[Stage 8][warning] Dissertation profile is running outside a virtual environment.",
+            f"[Stage 8][warning] {profile} profile is running outside a virtual environment.",
             flush=True,
         )
     env_meta["warnings"] = env_warnings
@@ -2474,7 +2537,7 @@ def run_stage8(
             monitoring_dates=effective_monitoring_dates,
             ncv_epoch=effective_ncv_epoch,
             ncv_epoch_source=effective_ncv_epoch_source,
-            experiment_role=experiment_role,
+            experiment_role=effective_experiment_role,
         )
         all_per_rep.extend(per_rep)
         all_beta.extend(beta)
@@ -2511,6 +2574,8 @@ def run_stage8(
         aggregate_rows_with_runtime,
         variance_ratio_summary,
         n_training=n_training,
+        n_pilot=n_pilot,
+        n_pricing=n_pricing,
     )
     _write_csv(run_dir / "equal_pricing_observations_summary.csv", equal_obs_rows)
 
@@ -2588,7 +2653,7 @@ def run_stage8(
         monitoring_dates=effective_monitoring_dates,
         fixed_ncv_epoch=effective_ncv_epoch,
         ncv_epoch_source=effective_ncv_epoch_source,
-        experiment_role=experiment_role,
+        experiment_role=effective_experiment_role,
     )
     _write_json(run_dir / "validation_report.json", validation_report)
 
@@ -2611,7 +2676,9 @@ def run_stage8(
             "monitoring_dates": effective_monitoring_dates,
             "fixed_ncv_epoch": effective_ncv_epoch,
             "ncv_epoch_source": effective_ncv_epoch_source,
-            "experiment_role": experiment_role,
+            "experiment_role": effective_experiment_role,
+            "hidden_width": STAGE8_HIDDEN_WIDTH,
+            "trainable_parameters": _trainable_parameter_count(effective_monitoring_dates, STAGE8_HIDDEN_WIDTH),
         }
         for r in aggregate_rows_with_runtime
     ]
@@ -2652,7 +2719,11 @@ def run_stage8(
 - base seed: {base_seed}
 - replications: {n_replications}
 - monitoring dates: {effective_monitoring_dates}
-- experiment role: {experiment_role}
+- hidden width: {STAGE8_HIDDEN_WIDTH}
+- trainable parameters: {_trainable_parameter_count(effective_monitoring_dates, STAGE8_HIDDEN_WIDTH)}
+- NCV training paths: {n_training}
+- NCV checkpoint: {effective_ncv_epoch}
+- experiment role: {effective_experiment_role}
 - sensitivity interpretation: {"joint monitoring-frequency/input-dimensionality sensitivity" if effective_monitoring_dates != default_monitoring_dates else "primary Stage 8 default configuration"}
 - fixed NCV epoch: {effective_ncv_epoch} ({effective_ncv_epoch_source})
 - neural_cv.train_network default epoch count: 200 (generic function default; Stage 8 overrides to fixed {effective_ncv_epoch})
@@ -2677,7 +2748,8 @@ def run_stage8(
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Stage 8: Frozen NCV Transfer, Calibration and Amortisation")
-    p.add_argument("--profile", choices=list(PROFILES), default="smoke", help="Execution profile (smoke | dissertation)")
+    profile_names = " | ".join(PROFILES.keys())
+    p.add_argument("--profile", choices=list(PROFILES), default="smoke", help=f"Execution profile ({profile_names})")
     p.add_argument("--base-seed", type=int, default=42, help="Base random seed")
     p.add_argument("--output-dir", default="experiment_runs", help="Base directory for timestamped output bundles")
     p.add_argument("--n-replications", type=int, default=None, help="Override profile default number of replications")

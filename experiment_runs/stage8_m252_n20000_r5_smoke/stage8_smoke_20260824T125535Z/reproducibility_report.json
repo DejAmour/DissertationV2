@@ -1,0 +1,13 @@
+{
+  "profile": "smoke",
+  "base_seed": 42,
+  "n_replications": 2,
+  "n_rows_per_replication_results": 80,
+  "n_rows_aggregate_results": 40,
+  "validation_passed": true,
+  "stable_summary_canonical_sha256": "fdae140438f04df2cb800701413a932a06150275475f51e3f928ce2181a32b4b",
+  "stable_summary_file_sha256": "085e7d0b0305fe10eaaa72541b21bb3c9d5457a65c280e38301f4059b0bd803f",
+  "stable_summary_hash_canonicalization": "columns=contract_id,method,successful_replications,mean_price,mean_estimator_variance,mean_reported_estimator_standard_error,monitoring_dates,fixed_ncv_epoch,ncv_epoch_source,experiment_role; row_order=contract_id_then_method; float_format=.17g; line_endings=LF_for_canonical_data; file_hash=raw_written_csv_bytes",
+  "note": "Compare canonical hash and file hash across a second identical run.",
+  "second_identical_run_match_confirmed": false
+}

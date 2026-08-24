@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "n_failures": 0,
+  "n_warnings": 0,
+  "failures": [],
+  "warnings": [],
+  "expected_metadata": {
+    "monitoring_dates": 252,
+    "fixed_ncv_epoch": 200,
+    "ncv_epoch_source": "capacity_and_data_sensitivity_best_tested_configuration",
+    "experiment_role": "expanded_training_followup_stage8_m252_n20000_r5_smoke",
+    "runtime_regime_ratio_threshold": 2.0
+  }
+}
