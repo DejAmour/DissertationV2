@@ -1,0 +1,83 @@
+{
+  "profile": "smoke",
+  "base_seed": 42,
+  "n_replications": 2,
+  "profile_replications_default": 2,
+  "n_training": 100,
+  "n_validation": 0,
+  "n_pilot": 50,
+  "n_pricing": 200,
+  "total_path_budget": 200,
+  "amortised_q_values": [
+    1,
+    5
+  ],
+  "n_high_precision": 2000,
+  "monitoring_dates": 252,
+  "hidden_width": 32,
+  "trainable_parameters": 8129,
+  "fixed_ncv_epoch": 200,
+  "ncv_epoch_source": "capacity_and_data_sensitivity_best_tested_configuration",
+  "experiment_role": "expanded_training_followup_stage8_m252_n20000_r5_smoke",
+  "follow_up_label": "",
+  "sensitivity_scope_description": "primary_stage8_default",
+  "epoch_selection_policy": "fixed_offline_preselected_no_online_checkpoint_selection",
+  "torch_available": true,
+  "contracts": {
+    "reference": {
+      "K": 100.0,
+      "sigma": 0.2,
+      "T": 1.0
+    },
+    "strike_low": {
+      "K": 80.0,
+      "sigma": 0.2,
+      "T": 1.0
+    },
+    "strike_high": {
+      "K": 120.0,
+      "sigma": 0.2,
+      "T": 1.0
+    },
+    "volatility_low": {
+      "K": 100.0,
+      "sigma": 0.1,
+      "T": 1.0
+    },
+    "volatility_high": {
+      "K": 100.0,
+      "sigma": 0.5,
+      "T": 1.0
+    },
+    "maturity_short": {
+      "K": 100.0,
+      "sigma": 0.2,
+      "T": 0.5
+    },
+    "maturity_long": {
+      "K": 100.0,
+      "sigma": 0.2,
+      "T": 2.0
+    }
+  },
+  "seed_offsets": {
+    "ref_train": 1000,
+    "ref_val": 2000,
+    "target_train": 3000,
+    "pilot": 4000,
+    "pricing": 5000,
+    "high_prec": 9000
+  },
+  "seed_namespace": {
+    "training_curve_offsets": {
+      "train": 1000,
+      "validation": 2000,
+      "test": 3000,
+      "gcv_pilot": 4000
+    },
+    "final_evaluation_offset": 10000000
+  },
+  "timestamp_utc": "20260824T124323Z",
+  "commit_hash": "157db2ba836e7df5709eabc18bd9dd43757941c3",
+  "empirical_equal_budget_enabled": false
+}

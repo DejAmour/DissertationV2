@@ -1,0 +1,20 @@
+{
+  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "python_version": "3.12.3",
+  "python_executable": "/usr/bin/python",
+  "virtual_environment_active": false,
+  "virtual_environment_path": "NA",
+  "numpy_version": "2.5.2",
+  "scipy_version": "1.18.1",
+  "torch_version": "2.13.0+cu130",
+  "pytest_version": "9.1.1",
+  "matplotlib_version": "3.11.1",
+  "torch_available": true,
+  "cuda_available": false,
+  "torch_deterministic_enabled": false,
+  "torch_deterministic_warn_only": false,
+  "cpu_count": 4,
+  "warnings": [
+    "m252_n20000_profile_running_outside_virtual_environment"
+  ]
+}
