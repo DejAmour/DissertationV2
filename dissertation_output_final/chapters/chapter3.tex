@@ -1,0 +1,280 @@
+\chapter{Monte Carlo and Classical Variance Reduction Methods}
+
+This chapter explains how Monte Carlo simulation is used to estimate the arithmetic Asian option price defined in Chapter 2. The chapter then introduces antithetic variates, the general control-variate method and the geometric Asian control variate. The neural control variate is considered separately in Chapter 4.
+
+\section{Standard Monte Carlo simulation}
+
+Monte Carlo simulation approximates the risk-neutral expectation by generating many possible asset-price paths and averaging the resulting discounted payoffs \parencite{boyle1977,glasserman2004}.
+
+For each simulated path \(i\), independent standard normal variables are generated and used in the GBM equation from Section 2.3. The arithmetic average and discounted payoff for that path are then calculated as
+\[
+Y_i
+=
+e^{-rT}
+\max\left(
+\frac{1}{m}\sum_{j=1}^{m}S_{t_j}^{(i)}-K,0
+\right).
+\]
+
+After simulating \(N\) independent paths, the standard Monte Carlo estimator is
+\[
+\widehat{V}_{\mathrm{MC}}
+=
+\frac{1}{N}\sum_{i=1}^{N}Y_i.
+\]
+
+Each \(Y_i\) is one possible discounted payoff under the risk-neutral measure. Their sample average provides an estimate of the option value \(V_0\). Since the paths are independent and generated under the correct risk-neutral distribution, the estimator is unbiased:
+\[
+\mathbb{E}^{\mathbb{Q}}
+\left[
+\widehat{V}_{\mathrm{MC}}
+\right]
+=
+V_0.
+\]
+
+If the variance of an individual discounted payoff is \(\sigma_Y^2\), the variance of the estimator is
+\[
+\operatorname{Var}
+\left(
+\widehat{V}_{\mathrm{MC}}
+\right)
+=
+\frac{\sigma_Y^2}{N}.
+\]
+
+The corresponding standard error is
+\[
+\operatorname{SE}
+\left(
+\widehat{V}_{\mathrm{MC}}
+\right)
+=
+\frac{\sigma_Y}{\sqrt{N}}.
+\]
+
+In practice, \(\sigma_Y\) is unknown and is replaced by the sample standard deviation of the simulated payoffs. The central limit theorem then allows a confidence interval to be constructed around the estimated price.
+
+The standard error decreases at the inverse square-root rate. Halving the standard error requires four times as many simulated paths, which increases the computational cost. Variance-reduction techniques aim to achieve the same accuracy using fewer paths.
+
+\section{Antithetic variates}
+
+Antithetic variates reduce variance by generating simulated paths in pairs. As explained in Section 2.3, each step of a simulated GBM path uses a random variable \(Z_j\). This variable follows the standard normal distribution, which has a mean of zero and a variance of one. It represents the random price movement during that time interval: a positive value pushes the price upwards, while a negative value pushes it downwards.
+
+The shocks used to generate one complete path can be collected into the vector
+\[
+Z=(Z_1,\ldots,Z_m).
+\]
+
+The antithetic method pairs this vector with
+\[
+-Z=(-Z_1,\ldots,-Z_m).
+\]
+
+Both vectors have the same probability distribution, but their shocks move in opposite directions.
+
+Let \(Y(Z)\) be the discounted option payoff generated using \(Z\). One antithetic observation is
+\[
+Y_{\mathrm{AV}}(Z)
+=
+\frac{Y(Z)+Y(-Z)}{2}.
+\]
+
+After generating \(N\) independent pairs, the antithetic estimator is
+\[
+\widehat{V}_{\mathrm{AV}}
+=
+\frac{1}{N}
+\sum_{i=1}^{N}
+Y_{\mathrm{AV}}(Z_i).
+\]
+
+Because \(Z\) and \(-Z\) have the same distribution, both payoffs have the same expected value. The antithetic estimator is therefore unbiased.
+
+The method reduces variance when the two payoffs are negatively correlated. If one path produces a payoff above its expected value, the paired path will tend to produce a payoff below it. Averaging the two offsets part of their variation. If their correlation is denoted by \(\rho\), then
+\[
+\operatorname{Var}
+\left(
+Y_{\mathrm{AV}}
+\right)
+=
+\frac{\sigma_Y^2}{2}(1+\rho).
+\]
+
+A more negative value of \(\rho\) produces a larger variance reduction. At an equal budget of two path evaluations, antithetic variates are less efficient than two independent Monte Carlo paths if the paired payoffs are positively correlated.
+
+Antithetic variates are simple to apply and require no training or analytically known option price \parencite{hammersley1956,glasserman2004}. However, each antithetic observation requires two asset-price paths to be generated and evaluated. Comparisons with standard Monte Carlo must therefore account for the additional path.
+
+\section{Control variates}
+
+A control variate reduces the variance of a Monte Carlo estimate by removing variation captured by a related quantity whose expected value is already known. Each simulated payoff is paired with this related quantity so that some of the randomness shared by the two can be cancelled.
+
+Let \(Y\) denote the discounted arithmetic Asian option payoff and let \(C\) denote a related random variable whose expected value,
+\[
+\mu_C
+=
+\mathbb{E}[C],
+\]
+is known. The control-variate observation is defined as
+\[
+Y_{\mathrm{CV}}
+=
+Y-\beta(C-\mu_C),
+\]
+where \(\beta\) is the control coefficient. Since
+\[
+\mathbb{E}[C-\mu_C]=0,
+\]
+the adjustment does not change the expected value:
+\[
+\mathbb{E}
+\left[
+Y_{\mathrm{CV}}
+\right]
+=
+\mathbb{E}[Y].
+\]
+
+The control variate therefore aims to reduce variance while leaving the option-price estimate unbiased.
+
+The variance of the adjusted observation is
+\[
+\operatorname{Var}
+\left(
+Y_{\mathrm{CV}}
+\right)
+=
+\operatorname{Var}(Y)
++
+\beta^2\operatorname{Var}(C)
+-
+2\beta\operatorname{Cov}(Y,C).
+\]
+
+Differentiating this expression with respect to \(\beta\) and setting the result equal to zero gives the variance-minimising coefficient:
+\[
+\beta^*
+=
+\frac{\operatorname{Cov}(Y,C)}
+{\operatorname{Var}(C)}.
+\]
+
+Substituting \(\beta^*\) back into the variance expression gives
+\[
+\operatorname{Var}
+\left(
+Y_{\mathrm{CV}}
+\right)
+=
+\operatorname{Var}(Y)
+\left(
+1-\rho_{Y,C}^{2}
+\right),
+\qquad
+\text{when } \beta=\beta^*,
+\]
+where \(\rho_{Y,C}\) is the correlation between \(Y\) and \(C\). A value of \(\lvert\rho_{Y,C}\rvert\) close to one therefore produces a large variance reduction. The correlation may be positive or negative because the sign of \(\beta^*\) adjusts accordingly.
+
+In practice, the optimal coefficient is unknown and must be estimated from simulated data. It may be estimated using the same observations employed for pricing, although this can introduce a small finite-sample bias. Alternatively, it can be estimated from an independent pilot sample and then held fixed during final pricing \parencite{glasserman2004}. This dissertation uses the second approach because it keeps coefficient estimation separate from final evaluation. The pilot sample introduces an additional simulation cost, which is included in the computational comparisons described in Chapter 5.
+
+The main practical requirement is finding a control that is strongly correlated with the target payoff and has a known expectation. For arithmetic Asian options under GBM, the geometric Asian payoff provides a natural control. Its value is available analytically, and it is strongly related to the arithmetic payoff because both are calculated from the same asset-price path \parencite{kemna1990}. The geometric Asian control variate is introduced formally in the next section.
+
+\section{Geometric Asian control variate}
+
+The geometric Asian control variate uses the payoff of a geometric Asian option to reduce the variance of the arithmetic Asian option estimate. Both payoffs are calculated from the same simulated asset-price path, but the geometric Asian option has an analytically known value under GBM \parencite{kemna1990}.
+
+For a path monitored at \(m\) dates, the geometric average is
+\[
+\bar{S}_G
+=
+\left(
+\prod_{j=1}^{m}S_{t_j}
+\right)^{1/m}.
+\]
+
+The discounted geometric Asian call payoff is
+\[
+C
+=
+e^{-rT}
+\max\left(
+\bar{S}_G-K,0
+\right).
+\]
+
+As shown in Section 2.4, \(\ln\bar{S}_G\) is normally distributed under GBM. Its mean and variance are
+\[
+\mu_G
+=
+\ln S_0
++
+\left(
+r-\frac{1}{2}\sigma^2
+\right)
+\frac{1}{m}
+\sum_{j=1}^{m}t_j
+\]
+and
+\[
+v_G
+=
+\frac{\sigma^2}{m^2}
+\sum_{j=1}^{m}
+\sum_{k=1}^{m}
+\min(t_j,t_k).
+\]
+
+The analytical value of the geometric Asian call is therefore
+\[
+V_G
+=
+e^{-rT}
+\left[
+e^{\mu_G+\frac{1}{2}v_G}\Phi(d_1)
+-
+K\Phi(d_2)
+\right],
+\]
+where
+\[
+d_1
+=
+\frac{\mu_G-\ln K+v_G}{\sqrt{v_G}},
+\qquad
+d_2
+=
+\frac{\mu_G-\ln K}{\sqrt{v_G}},
+\]
+and \(\Phi\) is the cumulative distribution function of the standard normal distribution.
+
+Since \(C\) is already discounted, its expected value is
+\[
+\mathbb{E}[C]
+=
+V_G.
+\]
+
+Let \(Y\) denote the discounted arithmetic Asian payoff calculated from the same path. The geometric control-variate observation is
+\[
+Y_{\mathrm{GCV}}
+=
+Y-\beta_G(C-V_G),
+\]
+where \(\beta_G\) is the control coefficient.
+
+After estimating this coefficient from an independent pilot sample, the final estimator is
+\[
+\widehat{V}_{\mathrm{GCV}}
+=
+\frac{1}{N}
+\sum_{i=1}^{N}
+\left[
+Y_i
+-
+\widehat{\beta}_G(C_i-V_G)
+\right].
+\]
+
+The arithmetic and geometric payoffs are strongly related because they are calculated using different averages of the same prices. The geometric payoff can therefore explain a large proportion of the variation in the arithmetic payoff. It is also inexpensive to calculate because it uses the asset-price path that has already been simulated. Its main additional cost is the pilot sample used to estimate the control coefficient.
+
+The geometric control variate provides a particularly strong classical benchmark in this dissertation. However, its analytical value depends on the structure of the Asian option and the GBM model. A similarly convenient control may not be available for a different payoff or asset-price model, which motivates the learned control introduced in Chapter 4.
