@@ -102,6 +102,16 @@ PROFILES = {
         "requires_torch": True,
         "description": "Frozen-network reuse only: m=252, width=16, 20k NCV training paths, 10 reps",
     },
+    "pcncv_smoke": {
+        "runner": "pcncv",
+        "pcncv_profile": "smoke",
+        "description": "Parameter-conditioned NCV smoke profile (m=12)",
+    },
+    "pcncv_dissertation": {
+        "runner": "pcncv",
+        "pcncv_profile": "dissertation",
+        "description": "Parameter-conditioned NCV dissertation profile (m=12)",
+    },
 }
 
 SEED_OFFSET_REF_TRAIN = 1_000
@@ -2581,6 +2591,21 @@ def run_stage8(
     experiment_role: str = STAGE8_EXPERIMENT_ROLE,
 ) -> Path:
     profile_cfg = PROFILES[profile]
+    if profile_cfg.get("runner") == "pcncv":
+        from asian_options.parameter_conditioned_stage8 import (
+            profile_config as _pcncv_profile_config,
+            run_parameter_conditioned_stage8,
+        )
+
+        mapped_profile = str(profile_cfg.get("pcncv_profile", "smoke"))
+        cfg = _pcncv_profile_config(
+            mapped_profile,
+            output_dir=output_dir,
+            base_seed=base_seed,
+        )
+        if n_replications_override is not None:
+            cfg = dataclasses.replace(cfg, replications=int(n_replications_override))
+        return run_parameter_conditioned_stage8(cfg)
     n_training = profile_cfg["n_training"]
     n_validation = profile_cfg.get("n_validation", 0)
     n_pilot = profile_cfg["n_pilot"]

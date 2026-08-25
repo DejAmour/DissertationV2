@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "m": 12,
+  "trainable_parameters": 545,
+  "expected_parameters": 545,
+  "replications": 2,
+  "main_runtime_s": 0.5121529020000253,
+  "selected_checkpoints": [
+    2,
+    10
+  ],
+  "n_rows_per_replication_results": 84,
+  "n_rows_checkpoint_history": 24,
+  "notes": [
+    "Final-pricing shocks are shared within each contract/replication across compatible methods.",
+    "PCNCV checkpoint selection uses auxiliary validation contracts and excludes final seven-contract pricing rows.",
+    "No m=252 variant executed in this experiment."
+  ]
+}

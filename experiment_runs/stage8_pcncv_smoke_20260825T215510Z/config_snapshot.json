@@ -1,0 +1,84 @@
+{
+  "profile": "smoke",
+  "base_seed": 42,
+  "replications": 2,
+  "n_training": 100,
+  "n_validation": 200,
+  "n_pilot": 50,
+  "n_pricing": 200,
+  "max_epochs": 10,
+  "checkpoints": [
+    0,
+    2,
+    5,
+    10
+  ],
+  "hidden_width": 32,
+  "learning_rate": 0.01,
+  "batch_size": 64,
+  "monitoring_dates": 12,
+  "output_dir": "experiment_runs",
+  "n_aux_validation_contracts": 3,
+  "frozen_reference_epochs": 10,
+  "parameter_bounds": {
+    "log_k_ratio_min": -0.2876820724517809,
+    "log_k_ratio_max": 0.22314355131420976,
+    "sigma_min": 0.08,
+    "sigma_max": 0.55,
+    "t_min": 0.4,
+    "t_max": 2.2
+  },
+  "input_dimension": 15,
+  "shock_dimension": 12,
+  "parameter_dimension": 3,
+  "trainable_parameters": 545,
+  "contract_grid": {
+    "reference": {
+      "K": 100.0,
+      "sigma": 0.2,
+      "T": 1.0
+    },
+    "strike_low": {
+      "K": 80.0,
+      "sigma": 0.2,
+      "T": 1.0
+    },
+    "strike_high": {
+      "K": 120.0,
+      "sigma": 0.2,
+      "T": 1.0
+    },
+    "volatility_low": {
+      "K": 100.0,
+      "sigma": 0.1,
+      "T": 1.0
+    },
+    "volatility_high": {
+      "K": 100.0,
+      "sigma": 0.5,
+      "T": 1.0
+    },
+    "maturity_short": {
+      "K": 100.0,
+      "sigma": 0.2,
+      "T": 0.5
+    },
+    "maturity_long": {
+      "K": 100.0,
+      "sigma": 0.2,
+      "T": 2.0
+    }
+  },
+  "seed_offsets": {
+    "training_parameters": 1000,
+    "training_shocks": 2000,
+    "validation_contracts": 3000,
+    "validation_shocks": 4000,
+    "gcv_pilot": 5000,
+    "conditional_ncv_pilot": 6000,
+    "frozen_ncv_pilot": 7000,
+    "final_pricing_shocks": 8000,
+    "reference_training": 9000
+  },
+  "created_at_utc": "20260825T215510Z"
+}
