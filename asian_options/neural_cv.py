@@ -82,7 +82,11 @@ class _ShallowNet:
         return out.ravel()
 
 
-def build_network(cfg: ModelConfig, hidden_width: int = 32) -> _ShallowNet:
+def build_network(
+    cfg: ModelConfig,
+    hidden_width: int = 32,
+    input_dim: Optional[int] = None,
+) -> _ShallowNet:
     """
     Construct the shallow integrable neural network H_theta.
 
@@ -92,9 +96,11 @@ def build_network(cfg: ModelConfig, hidden_width: int = 32) -> _ShallowNet:
     Parameters
     ----------
     cfg : ModelConfig
-        Configuration providing the input dimension (cfg.m).
+        Configuration providing defaults and RNG seed.
     hidden_width : int
         Number of hidden neurons.
+    input_dim : int or None
+        Input dimension. If None, defaults to cfg.m for backward compatibility.
 
     Returns
     -------
@@ -102,7 +108,9 @@ def build_network(cfg: ModelConfig, hidden_width: int = 32) -> _ShallowNet:
         Untrained network with Xavier-uniform initialisation.
     """
     rng = np.random.default_rng(cfg.seed)
-    fan_in = cfg.m
+    fan_in = int(cfg.m if input_dim is None else input_dim)
+    if fan_in < 1:
+        raise ValueError(f"input_dim must be >= 1, got {fan_in}")
     fan_out = hidden_width
     limit1 = math.sqrt(6.0 / (fan_in + fan_out))
     W1 = rng.uniform(-limit1, limit1, size=(hidden_width, fan_in))
@@ -239,6 +247,74 @@ def analytical_network_expectation(network: _ShallowNet) -> float:
 
     result = float(W2.reshape(-1) @ e_relu + float(b2.reshape(-1)[0]))
     return result
+
+
+def split_shock_and_parameter_weights(
+    network: _ShallowNet,
+    shock_dim: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Split first-layer weights into shock and parameter blocks.
+
+    Parameters
+    ----------
+    network : _ShallowNet
+        Frozen network.
+    shock_dim : int
+        Number of leading shock dimensions.
+
+    Returns
+    -------
+    tuple
+        (Wz, Wp, b1, W2, b2) where:
+        - Wz shape (hidden_width, shock_dim)
+        - Wp shape (hidden_width, input_dim - shock_dim)
+    """
+    W1, b1, W2, b2 = network.W1, network.b1, network.W2, network.b2
+    hidden_width, input_dim = W1.shape
+    if not (0 <= int(shock_dim) <= int(input_dim)):
+        raise ValueError(
+            f"shock_dim must be in [0, {input_dim}], got {shock_dim}."
+        )
+    if b1.shape != (hidden_width,):
+        raise ValueError(
+            f"b1 shape {b1.shape} inconsistent with W1 hidden_width {hidden_width}."
+        )
+    if W2.shape != (1, hidden_width):
+        raise ValueError(
+            f"W2 shape {W2.shape} must be (1, {hidden_width})."
+        )
+    if b2.shape != (1,):
+        raise ValueError(f"b2 shape {b2.shape} must be (1,).")
+    for name, arr in [("W1", W1), ("b1", b1), ("W2", W2), ("b2", b2)]:
+        if not np.all(np.isfinite(arr)):
+            raise ValueError(f"Network parameter {name} contains non-finite values.")
+
+    sdim = int(shock_dim)
+    return W1[:, :sdim], W1[:, sdim:], b1, W2, b2
+
+
+def analytical_network_expectation_conditional(
+    network: _ShallowNet,
+    parameter_values: np.ndarray | list[float] | tuple[float, ...],
+    shock_dim: int,
+) -> float:
+    """
+    Compute E[H_theta(Z, p) | p] analytically for fixed parameter inputs p.
+    """
+    from asian_options.analytical import relu_expected_value
+
+    Wz, Wp, b1, W2, b2 = split_shock_and_parameter_weights(network, shock_dim)
+    p = np.asarray(parameter_values, dtype=np.float64).reshape(-1)
+    if Wp.shape[1] != p.shape[0]:
+        raise ValueError(
+            f"parameter_values length {p.shape[0]} does not match "
+            f"parameter input dimension {Wp.shape[1]}."
+        )
+    mu = Wp @ p + b1
+    sigma_vec = np.linalg.norm(Wz, axis=1)
+    e_relu = relu_expected_value(mu, sigma_vec)
+    return float(W2.reshape(-1) @ e_relu + float(b2.reshape(-1)[0]))
 
 
 def ncv_estimator(network: _ShallowNet, cfg: ModelConfig, n_training_paths: int = 0):
