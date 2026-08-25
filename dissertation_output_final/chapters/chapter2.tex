@@ -1,0 +1,188 @@
+\chapter{The Pricing Problem}
+\label{chap:pricing-problem}
+
+This chapter defines the option-pricing problem considered in this dissertation. It first explains the payoff of a discretely monitored arithmetic Asian call. It then introduces risk-neutral valuation and the geometric Brownian motion model used to simulate the underlying asset price. Finally, it explains why the arithmetic Asian option cannot generally be valued analytically under this model and discusses the limitations of the modelling assumptions.
+
+\section{Arithmetic Asian Options}
+\label{sec:arithmetic-asian-options}
+
+A standard European call option has a payoff that depends only on the asset price at maturity. An Asian option is different because its payoff depends on the average asset price over a specified period. It is therefore a path-dependent option: the value depends on the prices observed throughout the monitoring period rather than on the final price alone.
+
+Suppose the asset price is observed at equally spaced monitoring dates,
+\[
+0<t_1<t_2<\dots<t_m=T.
+\]
+
+The arithmetic average of the monitored prices is
+\[
+\bar{S}_A
+=
+\frac{1}{m}
+\sum_{j=1}^{m}S_{t_j},
+\]
+where \(S_{t_j}\) is the asset price at monitoring date \(t_j\). The payoff of a fixed-strike arithmetic Asian call at maturity is then
+\[
+X_A
+=
+\max\left(\bar{S}_A-K,0\right),
+\]
+where \(K\) is the strike price. If the arithmetic average is above the strike, the option pays the difference. If the average is below the strike, the option expires with no value.
+
+The use of an average reduces the effect of any single price observation, but it also makes the pricing problem more difficult. Under geometric Brownian motion, each monitored asset price is lognormally distributed, but the arithmetic average is a sum of correlated lognormal variables. This average does not have a convenient known distribution, so the expected payoff cannot generally be calculated using a closed-form pricing formula \parencite{kemna1990,glasserman2004}. A numerical method is therefore required.
+
+\section{Risk Neutral Pricing}
+\label{sec:risk-neutral-pricing}
+
+Risk-neutral valuation follows from the assumption that the market contains no arbitrage opportunities. An arbitrage is a trading strategy that requires no initial investment, cannot produce a loss and has some possibility of producing a profit. If two portfolios generate the same future cash flows, the absence of arbitrage therefore requires them to have the same value today.
+
+Under suitable market assumptions, the absence of arbitrage allows asset prices to be represented under an equivalent risk-neutral probability measure, denoted by \(\mathbb{Q}\). Under this measure, discounted asset prices are martingales. For a non-dividend-paying asset, the expected rate of return under \(\mathbb{Q}\) is therefore the risk-free rate \(r\), rather than the return that investors expect in the real world.
+
+A derivative can then be valued by taking its expected payoff under \(\mathbb{Q}\) and discounting this expectation at the risk-free rate. The time-zero value of the arithmetic Asian call is therefore
+\[
+V_0
+=
+e^{-rT}
+\mathbb{E}^{\mathbb{Q}}
+\left[
+X_A
+\right].
+\]
+
+Using the payoff defined in Section~\ref{sec:arithmetic-asian-options} gives
+\[
+V_0
+=
+e^{-rT}
+\mathbb{E}^{\mathbb{Q}}
+\left[
+\max\left(\bar{S}_A-K,0\right)
+\right],
+\]
+where \(T\) is the time to maturity and \(\mathbb{E}^{\mathbb{Q}}\) denotes an expectation under the risk-neutral measure.
+
+The use of \(\mathbb{Q}\) does not assume that investors are genuinely indifferent to risk. Nor is it intended to predict how asset prices will behave in the real world. It is a mathematical measure used to obtain prices that are consistent with the absence of arbitrage. To evaluate the expectation above, a model is still required for the evolution of the asset price under \(\mathbb{Q}\). In this dissertation, the asset price is modelled using geometric Brownian motion.
+
+\section{Geometric Brownian Motion}
+\label{sec:gbm}
+
+Geometric Brownian motion (GBM) is the asset-price model used throughout this dissertation. Under the risk-neutral measure, the asset price \(S_t\) follows
+\[
+dS_t
+=
+rS_t\,dt
++
+\sigma S_t\,dW_t^{\mathbb{Q}},
+\]
+where \(r\) is the risk-free rate, \(\sigma\) is the volatility and \(W_t^{\mathbb{Q}}\) is a standard Brownian motion under the risk-neutral measure. The first term describes the expected growth of the asset price, while the second introduces random changes.
+
+Both terms are proportional to the current price \(S_t\). It is therefore more convenient to express the model in terms of proportional price changes:
+\[
+\frac{dS_t}{S_t}
+=
+r\,dt
++
+\sigma\,dW_t^{\mathbb{Q}}.
+\]
+
+Applying Itô's lemma to \(\ln S_t\) gives
+\[
+d\ln S_t
+=
+\left(
+r-\frac{1}{2}\sigma^2
+\right)dt
++
+\sigma\,dW_t^{\mathbb{Q}}.
+\]
+
+Integrating between time \(0\) and time \(t\) produces
+\[
+S_t
+=
+S_0
+\exp\left[
+\left(
+r-\frac{1}{2}\sigma^2
+\right)t
++
+\sigma W_t^{\mathbb{Q}}
+\right].
+\]
+
+The logarithm of \(S_t\) is therefore normally distributed, meaning that \(S_t\) itself is lognormally distributed. This ensures that the modelled asset price remains positive.
+
+For simulation between consecutive equally spaced monitoring dates, let \(t_0=0\) and define
+\[
+\Delta t
+=
+t_j-t_{j-1}
+=
+\frac{T}{m}.
+\]
+
+The solution can then be written as
+\[
+S_{t_j}
+=
+S_{t_{j-1}}
+\exp\left[
+\left(
+r-\frac{1}{2}\sigma^2
+\right)\Delta t
++
+\sigma\sqrt{\Delta t}\,Z_j
+\right],
+\]
+where \(Z_j\) is an independent standard normal random variable. Repeating this calculation across all monitoring dates generates one complete asset-price path. These simulated paths will later be used to calculate the arithmetic Asian option payoff.
+
+GBM assumes that the risk-free rate and volatility remain constant and that log returns over non-overlapping time intervals are independent and normally distributed. These assumptions make the model analytically and computationally convenient, although they also limit its ability to reproduce all features of observed asset prices. The implications of these limitations are discussed in Section~\ref{sec:gbm-limitations} \parencite{blackscholes1973,merton1973,glasserman2004}.
+
+\section{Arithmetic and Geometric Averaging under GBM}
+\label{sec:averaging-under-gbm}
+
+Under GBM, each monitored asset price \(S_{t_j}\) is lognormally distributed. The prices at different monitoring dates are also correlated because they are generated by the same asset-price path. The arithmetic average,
+\[
+\bar{S}_A
+=
+\frac{1}{m}
+\sum_{j=1}^{m}S_{t_j},
+\]
+is therefore a sum of correlated lognormal random variables. A sum of lognormal variables is not generally lognormally distributed and does not have a convenient known distribution. As a result, the risk-neutral expectation
+\[
+e^{-rT}
+\mathbb{E}^{\mathbb{Q}}
+\left[
+\max\left(\bar{S}_A-K,0\right)
+\right]
+\]
+cannot generally be evaluated using an exact closed-form formula. This is the reason a numerical pricing method is required for the arithmetic Asian option.
+
+The geometric average of the same monitored prices is
+\[
+\bar{S}_G
+=
+\left(
+\prod_{j=1}^{m}S_{t_j}
+\right)^{1/m}.
+\]
+
+Taking logarithms converts the product into a sum:
+\[
+\ln\bar{S}_G
+=
+\frac{1}{m}
+\sum_{j=1}^{m}\ln S_{t_j}.
+\]
+
+Under GBM, the log prices are jointly normally distributed. A linear combination of jointly normal variables is also normally distributed, so \(\ln\bar{S}_G\) is normal and \(\bar{S}_G\) is lognormal. The corresponding geometric Asian call can therefore be valued analytically under GBM \parencite{kemna1990}.
+
+This difference between the two averages is important for the later analysis. The arithmetic Asian option is the contract being priced, while the geometric Asian option provides an analytically tractable comparison based on the same asset-price path. Chapter 3 explains how this information can be used as a control variate when estimating the arithmetic Asian option price.
+
+\section{GBM Limitations}
+\label{sec:gbm-limitations}
+
+Modelling asset prices under GBM does not provide a complete description of asset-price behaviour. The model assumes that volatility and the risk-free rate remain constant, price paths are continuous, and log returns over non-overlapping periods are independent and normally distributed. In practice, asset returns can display time-varying volatility, heavier tails and sudden jumps. Commodity prices may also exhibit features such as mean reversion and seasonality that are not represented by the standard GBM model \parencite{cont2001,schwartz1997}.
+
+More complicated models can account for some of these features. For example, Heston \parencite*{heston1993} allows volatility to change stochastically, while Merton \parencite*{merton1976} introduces jumps into the asset-price process. These models are not considered here because the research question concerns the efficiency of variance-reduction methods under the standard GBM framework. Moving to another model would change both the simulated pricing problem and the availability of the analytical geometric control, and would therefore constitute a separate extension of the study.
+
+The conclusions of this dissertation are consequently conditional on the risk-neutral GBM framework. Whether neural control variates remain computationally effective under more realistic asset-price models is left for future research.
