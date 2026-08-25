@@ -1,0 +1,27 @@
+\chapter{Introduction}
+An Asian option is a path-dependent derivative whose payoff depends on an average of the underlying asset price over a set of monitoring dates[cite: 1]. In the arithmetic case, the monitored prices are added and divided by the number of fixings before the strike is applied[cite: 1]. This averaging reduces the influence of an individual price observation, but it also makes the option value depend on how the asset prices at all the monitoring dates behave together, not just the price on a single date[cite: 1].
+
+If the Asian option is modelled under geometric Brownian motion (GBM), the geometric average of the monitored prices is lognormally distributed and the corresponding option can be valued analytically[cite: 1]. The GBM framework is introduced in Section 2.3[cite: 1].
+
+The arithmetic average is instead a sum of correlated lognormal variables and does not produce a convenient closed-form price[cite: 1]. Monte Carlo simulation is therefore a natural pricing method[cite: 1]. It can generate the complete asset-price path, evaluate the discounted payoff and approximate the required risk-neutral expectation[cite: 1]. This allows it to handle higher-dimensional pricing problems, such as Asian options with many monitoring dates, without first reducing the problem to a small number of variables (Kemna and Vorst, 1990; Glasserman, 2004)[cite: 1].
+
+The main limitation of Monte Carlo simulation is its slow inverse square-root convergence rate[cite: 1]. This means that halving the sampling error requires approximately four times as many simulated paths[cite: 1]. This can become computationally expensive quickly[cite: 1]. That is why Variance-reduction techniques (VRTs) have been developed, they attempt to achieve the same or greater accuracy using fewer simulated paths at a lower computational cost[cite: 1]. This dissertation compares standard Monte Carlo with three VRTs: antithetic variates (AV), a geometric control variate (GCV) and a neural control variate (NCV)[cite: 1].
+
+\section{Motivation, Research Problem and Contribution}
+Variance-reduction techniques differ in both their statistical effectiveness and their computational requirements[cite: 1]. Antithetic variates and geometric control variates are relatively inexpensive to apply, whereas neural control variates require a neural network to be trained before pricing begins[cite: 1]. Previous research has shown that neural control variates can reduce sampling variance, but whether this improvement justifies their additional computational cost has received less attention[cite: 1].
+
+El Filali Ech-Chafiq, Lelong and Reghai (2021) examine dimension-reduction and direct neural controls across several payoffs and asset-pricing models[cite: 1]. This dissertation follows their direct neural-control approach, in which the expected output of the network can be calculated analytically[cite: 1]. Their efficiency analysis includes both training and pricing within an individual experiment, but the distinction between one-off training costs and the cost of repeated valuations is not its main focus[cite: 1]. Their parameter-robustness analysis also focuses mainly on dimension reduction rather than on reusing a previously trained network for new pricing problems[cite: 1].
+
+This dissertation therefore examines whether the variance reduction achieved by neural control variates justifies their additional computational cost when compared with simpler variance-reduction techniques[cite: 1]. It also considers whether the initial training cost can be spread across repeated valuations by reusing a trained network for related option contracts[cite: 1].
+
+\section{Research question and objectives}
+The main research question is:
+Under what conditions can a trained neural control variate improve the statistical and computational efficiency of arithmetic Asian option pricing relative to standard Monte Carlo, antithetic variates and a geometric Asian control variate?[cite: 1]
+
+Four objectives support this question[cite: 1]:
+\begin{itemize}
+    \item Compare the variance, standard error and variance-reduction ratio produced by the four estimators under each monitoring profile[cite: 1].
+    \item Distinguish equal-observation performance from efficiency under a common simulated-path budget[cite: 1].
+    \item Compare one-time training and pilot costs with pricing-only marginal cost, and estimate the number of valuations required to recover setup cost[cite: 1].
+    \item Examine whether a frozen reference network remains an effective control for related contracts without full retraining[cite: 1].
+\end{itemize}
