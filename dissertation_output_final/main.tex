@@ -5,6 +5,8 @@
 \usepackage{amssymb}
 \usepackage{geometry}
 \geometry{margin=1in}
+\usepackage[backend=biber,style=authoryear,sorting=nyt]{biblatex}
+\addbibresource{references.bib}
 
 \title{Neural Control Variates for Arithmetic Asian Option Pricing: \\ Statistical Efficiency, Computational Cost and Reuse}
 \author{Jed Dahlke \\ MSc Mathematical Finance Dissertation}
@@ -21,5 +23,7 @@
 \include{chapters/chapter4}
 \include{chapters/chapter5}
 \include{chapters/chapter6}
+
+\printbibliography[heading=bibintoc,title={References}]
 
 \end{document}

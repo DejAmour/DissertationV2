@@ -37,28 +37,3 @@ The computational results were more conditional. GCV was the more efficient meth
 The reuse experiments showed that a network trained for one contract did not generally remain competitive with GCV when transferred to other contracts using only a new control coefficient. The long-maturity contract was the exception, with reuse outperforming GCV under both monitoring profiles. The practical benefit of NCV is therefore currently greatest when the same pricing problem is repeated, rather than when contract or market parameters change frequently.
 
 Overall, neural control variates are not a replacement for simpler variance-reduction techniques for pricing arithmetic Asian options under GBM. They can provide substantial statistical and computational benefits when an accurately trained network is already available and can be used repeatedly. For isolated valuations, or where frequent changes require the network to be retrained, GCV remains the more practical method.
-
-\chapter*{References}
-\addcontentsline{toc}{chapter}{References}
-
-\noindent Black, F. and Scholes, M. (1973) ``The pricing of options and corporate liabilities'', \textit{Journal of Political Economy}, 81(3), pp. 637--654. doi: 10.1086/260062.\\[1ex]
-
-\noindent Boyle, P.P. (1977) ``Options: A Monte Carlo approach'', \textit{Journal of Financial Economics}, 4(3), pp. 323--338. doi: 10.1016/0304-405X(77)90005-8.\\[1ex]
-
-\noindent Cont, R. (2001) ``Empirical properties of asset returns: Stylized facts and statistical issues'', \textit{Quantitative Finance}, 1(2), pp. 223--236. doi: 10.1080/713665670.\\[1ex]
-
-\noindent El Filali Ech-Chafiq, Z., Lelong, J. and Reghai, A. (2021) ``Automatic control variates for option pricing using neural networks'', \textit{Monte Carlo Methods and Applications}, 27(2), pp. 91--104. doi: 10.1515/mcma-2020-2081.\\[1ex]
-
-\noindent Glasserman, P. (2004) \textit{Monte Carlo Methods in Financial Engineering}. New York: Springer. doi: 10.1007/978-0-387-21617-1.\\[1ex]
-
-\noindent Hammersley, J.M. and Morton, K.W. (1956) ``A new Monte Carlo technique: Antithetic variates'', \textit{Proceedings of the Cambridge Philosophical Society}, 52(3), pp. 449--475. doi: 10.1017/S0305004100031455.\\[1ex]
-
-\noindent Heston, S.L. (1993) ``A closed-form solution for options with stochastic volatility with applications to bond and currency options'', \textit{The Review of Financial Studies}, 6(2), pp. 327--343. doi: 10.1093/rfs/6.2.327.\\[1ex]
-
-\noindent Kemna, A.G.Z. and Vorst, A.C.F. (1990) ``A pricing method for options based on average asset values'', \textit{Journal of Banking \& Finance}, 14(1), pp. 113--129. doi: 10.1016/0378-4266(90)90039-5.\\[1ex]
-
-\noindent Merton, R.C. (1973) ``Theory of rational option pricing'', \textit{The Bell Journal of Economics and Management Science}, 4(1), pp. 141--183. doi: 10.2307/3003143.\\[1ex]
-
-\noindent Merton, R.C. (1976) ``Option pricing when underlying stock returns are discontinuous'', \textit{Journal of Financial Economics}, 3(1--2), pp. 125--144. doi: 10.1016/0304-405X(76)90022-2.\\[1ex]
-
-\noindent Schwartz, E.S. (1997) ``The stochastic behavior of commodity prices: Implications for valuation and hedging'', \textit{The Journal of Finance}, 52(3), pp. 923--973. doi: 10.1111/j.1540-6261.1997.tb02721.x.
