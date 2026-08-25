@@ -1,0 +1,536 @@
+\chapter{Neural Control Variates}
+\label{chap:neural-control-variates}
+
+The geometric control variate provides a strong and inexpensive benchmark for arithmetic Asian options under GBM. A neural control variate instead learns a control from simulated data but requires a neural network to be trained before pricing begins. This chapter explains how the neural control is constructed and why its expected output can be calculated analytically.
+
+\section{Learning a Control Variate}
+\label{sec:learning-neural-control}
+
+A neural network can be trained to approximate the relationship between the random inputs used to generate an asset-price path and the resulting discounted payoff. If the network reproduces changes in the payoff accurately, its output should be strongly correlated with the payoff and may therefore provide an effective control variate.
+
+The neural network does not replace Monte Carlo simulation or directly determine the final option price. Instead, its output is used as the control \(C\) in the control-variate estimator introduced in Section 3.3. Let \(H_\theta(Z)\) denote the output of a neural network with fitted parameters \(\theta\), where \(Z\) is the vector of standard normal shocks used to generate the asset-price path. The corresponding neural control-variate observation is
+\[
+Y_{\mathrm{NCV}}
+=
+Y
+-
+\beta_H
+\left(
+H_\theta(Z)
+-
+\mathbb{E}[H_\theta(Z)]
+\right).
+\]
+
+To use the network as a control variate, its expected output must be known. This is often difficult for a neural network because its output is a complicated function of its random inputs. The expectation could be estimated using a separate Monte Carlo simulation, but this would introduce another source of sampling error and additional computational cost. For the neural control to be useful in this study, its expectation must therefore be calculated accurately and efficiently. The chosen network architecture allows this expectation to be obtained analytically.
+
+\textcite{elfilali2021} apply neural controls to option-pricing problems and propose a network whose expected output can be calculated analytically when the inputs are Gaussian. This dissertation follows their direct neural-control approach.
+
+The network used here contains one hidden layer with a ReLU activation function and a linear output. This architecture is deliberately restricted so that its expected output remains analytically available. The network structure is introduced in the next section before the expectation is derived.
+
+\section{Network Architecture}
+\label{sec:network-architecture}
+
+The discounted arithmetic Asian payoff can be written as a function of the standard normal shocks used to generate the asset-price path:
+\[
+Y=f(Z),
+\]
+where
+\[
+Z=(Z_1,\ldots,Z_m)^\top.
+\]
+
+For each simulated path \(i\), a new input vector
+\[
+Z^{(i)}
+=
+\left(
+Z_1^{(i)},\ldots,Z_m^{(i)}
+\right)^\top
+\]
+is generated, containing one standard normal shock for each monitoring interval. This vector is used to generate one asset-price path and its discounted payoff,
+\[
+Y^{(i)}
+=
+f\left(Z^{(i)}\right).
+\]
+
+The training sample contains many of these input-payoff pairs. The purpose of the neural network is to learn the relationship between the simulated shocks \(Z\) and the resulting discounted payoff \(f(Z)\).
+
+Following the direct neural-control construction of \textcite{elfilali2021}, the network contains one hidden layer with \(h\) neurons, a ReLU activation function and a linear output. It is written as
+\[
+H_\theta(Z)
+=
+W_2\operatorname{ReLU}(W_1Z+b_1)+b_2,
+\]
+where
+\[
+W_1\in\mathbb{R}^{h\times m},
+\qquad
+b_1\in\mathbb{R}^{h},
+\qquad
+W_2\in\mathbb{R}^{1\times h},
+\qquad
+b_2\in\mathbb{R}.
+\]
+
+The collection of weights and biases is denoted by \(\theta\).
+
+The first layer forms a weighted combination of the inputs. Before applying the activation function, the value for hidden neuron \(i\) is
+\[
+A_i
+=
+w_i^\top Z+b_{1,i},
+\]
+where \(w_i^\top\) is row \(i\) of \(W_1\). The ReLU function is then applied:
+\[
+\operatorname{ReLU}(A_i)
+=
+\max(A_i,0).
+\]
+
+Negative values are replaced by zero, while positive values remain unchanged. The linear output layer combines the activated neurons:
+\[
+H_\theta(Z)
+=
+\sum_{i=1}^{h}
+W_{2,i}\max(A_i,0)+b_2.
+\]
+
+% Insert the neural-network architecture diagram here.
+
+The network output is trained to follow changes in the discounted payoff \(f(Z)\). It does not need to reproduce the payoff perfectly. For use as a control variate, it only needs to explain enough of the payoff variation to reduce the variance of the final estimator.
+
+The shallow architecture is important because it allows the expected network output to be calculated from the fitted weights and biases. The next section derives this expectation.
+
+\section{Analytical Expectation of the Network Output}
+\label{sec:analytical-network-expectation}
+
+Once training is complete, the network weights and biases are fixed. The only remaining randomness comes from the input vector
+\[
+Z\sim\mathcal{N}(0,I_m),
+\]
+where \(I_m\) is the \(m\times m\) identity matrix. The elements of \(Z\) are therefore independent standard normal random variables.
+
+The network output can be written as
+\[
+H_\theta(Z)
+=
+\sum_{i=1}^{h}
+W_{2,i}\max(A_i,0)+b_2,
+\]
+where
+\[
+A_i
+=
+w_i^\top Z+b_{1,i}
+\]
+is the value entering hidden neuron \(i\) before ReLU is applied. Here, \(w_i^\top\) is row \(i\) of \(W_1\).
+
+The first step is to find the distribution of \(A_i\). Since \(A_i\) is a linear combination of normally distributed variables, it is also normally distributed:
+\[
+A_i
+\sim
+\mathcal{N}(\mu_i,\sigma_i^2).
+\]
+
+Its mean is
+\[
+\begin{aligned}
+\mu_i
+&=
+\mathbb{E}[A_i] \\
+&=
+\mathbb{E}
+\left[
+w_i^\top Z+b_{1,i}
+\right] \\
+&=
+w_i^\top\mathbb{E}[Z]+b_{1,i}.
+\end{aligned}
+\]
+
+Since \(\mathbb{E}[Z]=0\),
+\[
+\mu_i=b_{1,i}.
+\]
+
+Its variance is
+\[
+\begin{aligned}
+\sigma_i^2
+&=
+\operatorname{Var}(A_i) \\
+&=
+\operatorname{Var}
+\left(
+w_i^\top Z+b_{1,i}
+\right) \\
+&=
+\operatorname{Var}
+\left(
+w_i^\top Z
+\right).
+\end{aligned}
+\]
+
+Adding the constant bias \(b_{1,i}\) changes the mean but not the variance. Since the covariance matrix of \(Z\) is \(I_m\),
+\[
+\begin{aligned}
+\sigma_i^2
+&=
+w_i^\top I_m w_i \\
+&=
+w_i^\top w_i \\
+&=
+\sum_{j=1}^{m}W_{1,ij}^{2}.
+\end{aligned}
+\]
+
+Here, \(W_{1,ij}\) is the weight connecting input \(Z_j\) to hidden neuron \(i\).
+
+The network applies ReLU to \(A_i\):
+\[
+\operatorname{ReLU}(A_i)
+=
+\max(A_i,0).
+\]
+
+The remaining problem is therefore to calculate the expected positive part of a normally distributed variable.
+
+Suppose
+\[
+X\sim\mathcal{N}(\mu,\sigma^2),
+\qquad
+\sigma>0.
+\]
+
+The standard normal density is
+\[
+\phi(u)
+=
+\frac{1}{\sqrt{2\pi}}e^{-u^2/2},
+\]
+and its cumulative distribution function is
+\[
+\Phi(a)
+=
+\int_{-\infty}^{a}\phi(u)\,du.
+\]
+
+Since \(X^+=\max(X,0)\), negative values contribute nothing to its expectation. Therefore,
+\[
+\mathbb{E}[X^+]
+=
+\int_0^\infty x f_X(x)\,dx,
+\]
+where the density of \(X\) is
+\[
+f_X(x)
+=
+\frac{1}{\sigma}
+\phi\left(
+\frac{x-\mu}{\sigma}
+\right).
+\]
+
+Substituting this density gives
+\[
+\mathbb{E}[X^+]
+=
+\int_0^\infty
+x\frac{1}{\sigma}
+\phi\left(
+\frac{x-\mu}{\sigma}
+\right)
+\,dx.
+\]
+
+Now make the substitution
+\[
+u=\frac{x-\mu}{\sigma}.
+\]
+
+Rearranging gives
+\[
+x=\mu+\sigma u
+\]
+and
+\[
+dx=\sigma\,du.
+\]
+
+When \(x=0\), the new lower limit is
+\[
+u=-\frac{\mu}{\sigma}.
+\]
+
+When \(x\) approaches infinity, \(u\) also approaches infinity. The expectation therefore becomes
+\[
+\begin{aligned}
+\mathbb{E}[X^+]
+&=
+\int_{-\mu/\sigma}^{\infty}
+(\mu+\sigma u)
+\frac{1}{\sigma}
+\phi(u)\,
+\sigma\,du \\
+&=
+\int_{-\mu/\sigma}^{\infty}
+(\mu+\sigma u)\phi(u)\,du.
+\end{aligned}
+\]
+
+Separating the two terms gives
+\[
+\mathbb{E}[X^+]
+=
+\mu
+\int_{-\mu/\sigma}^{\infty}
+\phi(u)\,du
++
+\sigma
+\int_{-\mu/\sigma}^{\infty}
+u\phi(u)\,du.
+\]
+
+Consider the first integral. From the definition of the standard normal CDF,
+\[
+\int_{-\mu/\sigma}^{\infty}
+\phi(u)\,du
+=
+1-\Phi\left(-\frac{\mu}{\sigma}\right).
+\]
+
+The standard normal distribution is symmetric, so
+\[
+\Phi(-a)=1-\Phi(a).
+\]
+
+It follows that
+\[
+1-\Phi\left(-\frac{\mu}{\sigma}\right)
+=
+\Phi\left(\frac{\mu}{\sigma}\right).
+\]
+
+Therefore,
+\[
+\int_{-\mu/\sigma}^{\infty}
+\phi(u)\,du
+=
+\Phi\left(\frac{\mu}{\sigma}\right).
+\]
+
+For the second integral, differentiating the standard normal density gives
+\[
+\phi'(u)=-u\phi(u).
+\]
+
+Therefore,
+\[
+u\phi(u)=-\phi'(u),
+\]
+and hence
+\[
+\begin{aligned}
+\int_{-\mu/\sigma}^{\infty}
+u\phi(u)\,du
+&=
+\left[
+-\phi(u)
+\right]_{-\mu/\sigma}^{\infty} \\
+&=
+\phi\left(-\frac{\mu}{\sigma}\right).
+\end{aligned}
+\]
+
+The standard normal density is also symmetric, meaning that
+\[
+\phi(-a)=\phi(a).
+\]
+
+Consequently,
+\[
+\int_{-\mu/\sigma}^{\infty}
+u\phi(u)\,du
+=
+\phi\left(\frac{\mu}{\sigma}\right).
+\]
+
+Substituting both results into the expectation gives
+\[
+\mathbb{E}[X^+]
+=
+\sigma
+\phi\left(\frac{\mu}{\sigma}\right)
++
+\mu
+\Phi\left(\frac{\mu}{\sigma}\right).
+\]
+
+Applying this result to hidden neuron \(i\) gives
+\[
+\mathbb{E}
+\left[
+\operatorname{ReLU}(A_i)
+\right]
+=
+\sigma_i
+\phi\left(\frac{\mu_i}{\sigma_i}\right)
++
+\mu_i
+\Phi\left(\frac{\mu_i}{\sigma_i}\right),
+\qquad
+\sigma_i>0.
+\]
+
+If \(\sigma_i=0\), then \(A_i\) is deterministic and
+\[
+\mathbb{E}
+\left[
+\operatorname{ReLU}(A_i)
+\right]
+=
+\max(\mu_i,0).
+\]
+
+The complete network output is a linear combination of these hidden-neuron outputs. Linearity of expectation therefore gives
+\[
+\mathbb{E}
+\left[
+H_\theta(Z)
+\right]
+=
+b_2
++
+\sum_{i=1}^{h}
+W_{2,i}
+\left[
+\sigma_i
+\phi\left(\frac{\mu_i}{\sigma_i}\right)
++
+\mu_i
+\Phi\left(\frac{\mu_i}{\sigma_i}\right)
+\right],
+\]
+for hidden neurons with \(\sigma_i>0\), with the deterministic expression above used when \(\sigma_i=0\).
+
+The hidden neurons do not need to be independent for this calculation. Linearity of expectation allows their expectations to be added even when their outputs are correlated.
+
+The fitted network can now be centred around its analytically known expectation. With the control coefficient fixed at one, the neural control-variate observation is
+\[
+Y_{\mathrm{NCV}}
+=
+f(Z)-H_\theta(Z)+\mathbb{E}[H_\theta(Z)].
+\]
+
+Taking expectations gives
+\[
+\begin{aligned}
+\mathbb{E}
+\left[
+Y_{\mathrm{NCV}}
+\right]
+&=
+\mathbb{E}[f(Z)]
+-
+\mathbb{E}[H_\theta(Z)]
++
+\mathbb{E}[H_\theta(Z)] \\
+&=
+\mathbb{E}[f(Z)].
+\end{aligned}
+\]
+
+The adjustment therefore leaves the expected option price unchanged. If the network successfully follows variation in the payoff, subtracting its centred output can reduce the sampling variance. Crucially, its expectation is obtained directly from the fitted parameters.
+
+\section{Network Training}
+\label{sec:network-training}
+
+For each training path, the shock vector \(Z^{(i)}\) is supplied to the network and the corresponding discounted payoff \(f(Z^{(i)})\) is used as the target. The network produces its own output \(H_\theta(Z^{(i)})\), and training aims to minimise the mean squared difference between the two:
+\[
+\widehat{\theta}
+=
+\underset{\theta}{\operatorname{arg\,min}}
+\frac{1}{N_{\mathrm{train}}}
+\sum_{i=1}^{N_{\mathrm{train}}}
+\left[
+f\left(Z^{(i)}\right)
+-
+H_\theta\left(Z^{(i)}\right)
+\right]^2.
+\]
+
+The difference between the discounted payoff and the network output is the prediction error. During training, backpropagation calculates how each weight and bias affects the mean squared error. An optimisation algorithm then adjusts the parameters to reduce this error. The optimisation algorithm and training settings used in the experiments are reported in Section 5.2.
+
+One complete pass through the training sample is called an epoch. A checkpoint is a saved version of the network weights and biases after a particular epoch. Saving checkpoints makes it possible to compare the network at different stages of training and select the version that performs best on unseen data.
+
+The network does not need to reproduce every payoff exactly. It needs to capture enough of the variation in \(f(Z)\) that the residual
+\[
+f(Z)-H_\theta(Z)
+\]
+has lower variance than the original payoff. Once the final checkpoint has been selected, its parameters are fixed and are not updated during pricing. The final pricing paths are generated independently of the training and validation samples.
+
+Training creates a setup cost that is not present for standard Monte Carlo or antithetic variates. Whether the resulting variance reduction is large enough to justify this cost is examined in the experimental design and results chapters.
+
+\section{Reusing a Trained Network}
+\label{sec:reusing-trained-network}
+
+Training a neural control variate creates a one-off computational cost. If the network is used to price only one option, this full cost must be justified by the variance reduction achieved for that valuation. If the same network can be reused, its training cost can instead be spread across several pricing problems.
+
+Suppose a network \(H_{\theta_0}\) has been trained for a reference contract. Reusing the network means applying it to a related target contract without changing its weights or biases. The target payoff changes, but the network remains fixed or frozen.
+
+Let \(f_q(Z)\) denote the discounted payoff of target contract \(q\). The frozen network can first be applied with a control coefficient fixed at one:
+\[
+Y_{\mathrm{frozen},1}
+=
+f_q(Z)
+-
+H_{\theta_0}(Z)
++
+\mathbb{E}
+\left[
+H_{\theta_0}(Z)
+\right].
+\]
+
+This tests whether the network output remains useful for the target contract without any additional fitting. Its expectation remains available analytically because the network parameters have not changed.
+
+A change in the contract may alter the scale of the relationship between the network output and the target payoff. A target-specific coefficient can therefore be estimated. The population variance-minimising coefficient is
+\[
+\beta_q^*
+=
+\frac{
+\operatorname{Cov}
+\left(
+f_q(Z),H_{\theta_0}(Z)
+\right)
+}{
+\operatorname{Var}
+\left(
+H_{\theta_0}(Z)
+\right)
+}.
+\]
+
+In practice, this coefficient is estimated from an independent target-specific pilot sample and then held fixed during final pricing. The resulting observation is
+\[
+Y_{\mathrm{frozen},\beta}
+=
+f_q(Z)
+-
+\widehat{\beta}_q
+\left[
+H_{\theta_0}(Z)
+-
+\mathbb{E}
+\left[
+H_{\theta_0}(Z)
+\right]
+\right].
+\]
+
+Estimating \(\widehat{\beta}_q\) can rescale the frozen network when a useful relationship remains. However, it cannot recover payoff information that the reference network did not learn. It also requires a target-specific pilot sample, which creates an additional cost.
+
+Direct reuse requires the reference and target contracts to have the same number of monitoring dates. This is because a network trained with \(m\) monitoring dates expects an input vector containing \(m\) shocks. The strike, volatility and maturity may change while the number of monitoring dates remains fixed. However, a network trained for a 12-date contract cannot be applied directly to a 252-date contract because the input vector has a different length. The specific contracts used in the reuse analysis are described in Chapter 5.
