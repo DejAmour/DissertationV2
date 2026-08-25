@@ -2393,7 +2393,8 @@ def _build_validation_report(
             f"expected {n_replications}, got {shared_rows_count}"
         )
     shared_replications = [int(r.get("replication", -1)) for r in shared_training_rows]
-    if len(set(shared_replications)) != n_replications or set(shared_replications) != set(range(n_replications)):
+    shared_replication_set = set(shared_replications)
+    if len(shared_replication_set) != n_replications or shared_replication_set != set(range(n_replications)):
         failures.append("shared reference training replications are not exactly one record per replication")
 
     for cid in CONTRACT_IDS:
