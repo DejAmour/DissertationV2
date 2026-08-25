@@ -780,6 +780,15 @@ def test_stage8_profiles_include_new_m252_n20000_and_keep_existing_defaults():
     assert expanded["n_replications"] == 5
     assert expanded["ncv_epoch"] == 200
 
+    reuse_only = s8.PROFILES["m252_w16_n20000_r10_frozen_reuse"]
+    assert reuse_only["monitoring_dates"] == 252
+    assert reuse_only["hidden_width"] == 16
+    assert reuse_only["n_training"] == 20_000
+    assert reuse_only["n_replications"] == 10
+    assert reuse_only["ncv_epoch"] == 200
+    assert reuse_only["include_transfer_methods"] is True
+    assert reuse_only["include_scratch_ncv"] is False
+
 
 def test_m252_width32_trainable_parameter_count():
     assert s8._trainable_parameter_count(252, 32) == 8_129
