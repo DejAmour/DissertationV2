@@ -31,7 +31,13 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
         path.write_text("", encoding="utf-8")
         return
-    fields = list(rows[0].keys())
+    fields: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for k in row.keys():
+            if k not in seen:
+                seen.add(k)
+                fields.append(k)
     with path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fields)
         writer.writeheader()
@@ -221,24 +227,28 @@ def run_missing_cells_and_combine(
     output_dir: Path,
     base_seed: int,
     existing_run_dir: Path | None,
+    new_run_dir: Path | None,
 ) -> dict[str, str]:
     existing_dir = existing_run_dir or _discover_existing_dissertation_run(repo_root)
     gcv_rows = _read_csv(existing_dir / "capacity_data_gcv_benchmark.csv")
-    missing_cfg = profile_config(
-        "dissertation",
-        output_dir=str(output_dir),
-        base_seed=base_seed,
-        dissertation_cell_set="missing_cells",
-    )
-    new_run_dir = run_capacity_data_sensitivity(missing_cfg, gcv_benchmark_rows=gcv_rows)
+    computed_new_run_dir = new_run_dir
+    if computed_new_run_dir is None:
+        missing_cfg = profile_config(
+            "dissertation",
+            output_dir=str(output_dir),
+            base_seed=base_seed,
+            dissertation_cell_set="missing_cells",
+        )
+        computed_new_run_dir = run_capacity_data_sensitivity(missing_cfg, gcv_benchmark_rows=gcv_rows)
+    assert computed_new_run_dir is not None
 
-    combined_root = new_run_dir.parent / "combined_full_grid_m252"
+    combined_root = computed_new_run_dir.parent / "combined_full_grid_m252"
     combined_root.mkdir(parents=True, exist_ok=False)
 
     existing_per_rep = _read_csv(existing_dir / "capacity_data_per_replication.csv")
     existing_sel = _read_csv(existing_dir / "capacity_data_selected_checkpoints.csv")
-    new_per_rep = _read_csv(new_run_dir / "capacity_data_per_replication.csv")
-    new_sel = _read_csv(new_run_dir / "capacity_data_selected_checkpoints.csv")
+    new_per_rep = _read_csv(computed_new_run_dir / "capacity_data_per_replication.csv")
+    new_sel = _read_csv(computed_new_run_dir / "capacity_data_selected_checkpoints.csv")
 
     combined_per_rep = _combine_rows(existing_per_rep, new_per_rep)
     combined_sel = _combine_rows(existing_sel, new_sel)
@@ -287,7 +297,7 @@ def run_missing_cells_and_combine(
         {
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "existing_run_dir": str(existing_dir),
-            "new_run_dir": str(new_run_dir),
+            "new_run_dir": str(computed_new_run_dir),
             "combined_run_dir": str(combined_root),
             "combined_unique_cells": sorted(selected.keys()),
             "combined_unique_cell_count": len(selected),
@@ -295,7 +305,7 @@ def run_missing_cells_and_combine(
     )
     return {
         "existing_run_dir": str(existing_dir),
-        "new_run_dir": str(new_run_dir),
+        "new_run_dir": str(computed_new_run_dir),
         "combined_run_dir": str(combined_root),
     }
 
@@ -306,6 +316,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output-dir", default="experiment_runs/capacity_data_missing_cells_m252")
     p.add_argument("--base-seed", type=int, default=42)
     p.add_argument("--existing-run-dir", default=None)
+    p.add_argument("--new-run-dir", default=None)
     return p
 
 
@@ -316,10 +327,10 @@ def main() -> None:
         output_dir=Path(args.output_dir),
         base_seed=args.base_seed,
         existing_run_dir=Path(args.existing_run_dir).resolve() if args.existing_run_dir else None,
+        new_run_dir=Path(args.new_run_dir).resolve() if args.new_run_dir else None,
     )
     print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
     main()
-
