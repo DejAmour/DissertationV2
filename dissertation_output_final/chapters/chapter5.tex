@@ -10,6 +10,7 @@ Six additional contracts are created by changing the strike, volatility or matur
 
 \begin{table}[h]
 \centering
+\begin{adjustbox}{max width=\textwidth}
 \begin{tabular}{lccc}
 \hline
 Contract & $K$ & $\sigma$ & $T$ \\
@@ -23,6 +24,7 @@ Short maturity & 100 & 0.20 & 0.5 \\
 Long maturity & 100 & 0.20 & 2.0 \\
 \hline
 \end{tabular}
+\end{adjustbox}
 \end{table}
 
 This gives a seven-contract grid in which the effect of changing each contract parameter can be examined separately. The initial asset price and risk-free rate remain fixed at $S_0=100$ and $r=0.05$ throughout.
@@ -47,6 +49,7 @@ Table X reports the variance-reduction ratio relative to standard Monte Carlo. A
 
 \begin{table}[h]
 \centering
+\begin{adjustbox}{max width=\textwidth}
 \begin{tabular}{lccc}
 \hline
 Hidden width & 5,000 training paths & 10,000 training paths & 20,000 training paths \\
@@ -56,6 +59,7 @@ Hidden width & 5,000 training paths & 10,000 training paths & 20,000 training pa
 32 & 227 & 609 & 3,510 \\
 \hline
 \end{tabular}
+\end{adjustbox}
 \end{table}
 
 Increasing the amount of training data improved every network. With 5,000 paths, performance became worse as the hidden width increased. The width-8 network achieved a variance-reduction ratio of 309, compared with 227 for the width-32 network. All three networks also selected the relatively early checkpoint at epoch 25.
@@ -76,6 +80,7 @@ The final network configurations are summarised below.
 
 \begin{table}[h]
 \centering
+\begin{adjustbox}{max width=\textwidth}
 \begin{tabular}{lccccc}
 \hline
 Monitoring dates & Hidden width & Parameters & Training paths & Paths per parameter & Selected checkpoint \\
@@ -84,6 +89,7 @@ Monitoring dates & Hidden width & Parameters & Training paths & Paths per parame
 252 & 16 & 4,065 & 20,000 & 4.92 & 200 \\
 \hline
 \end{tabular}
+\end{adjustbox}
 \end{table}
 
 These configurations are used in the subsequent comparisons with standard Monte Carlo, antithetic variates and the geometric control variate.
@@ -100,6 +106,7 @@ For antithetic variates, one observation is the average payoff from a path gener
 
 \begin{table}[h]
 \centering
+\begin{adjustbox}{max width=\textwidth}
 \begin{tabular}{lccc}
 \hline
 Method & Setup paths & Pricing observations & Total path evaluations \\
@@ -111,12 +118,14 @@ Neural control variate, 12 dates & 5,000 & 50,000 & 55,000 \\
 Neural control variate, 252 dates & 20,000 & 50,000 & 70,000 \\
 \hline
 \end{tabular}
+\end{adjustbox}
 \end{table}
 
 A second comparison used a fixed total budget of 50,000 simulated paths. Setup paths were included within this budget. Monte Carlo therefore retained all 50,000 paths for pricing, while antithetic variates used 25,000 pairs. After allowing for setup, the geometric control variate used 49,000 pricing paths. The 12-date neural control variate used 45,000 pricing paths, while the 252-date neural control variate used 30,000.
 
 \begin{table}[h]
 \centering
+\begin{adjustbox}{max width=\textwidth}
 \begin{tabular}{lccc}
 \hline
 Method & Setup paths & Pricing observations & Total path budget \\
@@ -128,6 +137,7 @@ Neural control variate, 12 dates & 5,000 & 45,000 & 50,000 \\
 Neural control variate, 252 dates & 20,000 & 30,000 & 50,000 \\
 \hline
 \end{tabular}
+\end{adjustbox}
 \end{table}
 
 The equal-observation comparison measures how much variance each method removes once it is available for pricing. The equal-budget comparison also accounts for the simulated paths used to estimate the geometric control coefficient or train the neural network.
@@ -164,6 +174,7 @@ Table X reports the results for the 12-date network, which was trained using 5,0
 
 \begin{table}[h]
 \centering
+\begin{adjustbox}{max width=\textwidth}
 \begin{tabular}{lcccc}
 \hline
 Contract & AV/MC & GCV/MC & NCV/MC & NCV/GCV \\
@@ -177,6 +188,7 @@ Short maturity & 4.05 & 2,698.6 & 30,167.7 & 11.18 \\
 Long maturity & 4.29 & 598.4 & 13,949.1 & 23.31 \\
 \hline
 \end{tabular}
+\end{adjustbox}
 \end{table}
 
 All three methods reduced variance relative to standard Monte Carlo. Antithetic variates produced the smallest improvement for most contracts, while GCV produced much larger reductions. However, NCV substantially outperformed both classical methods across the complete contract grid.
@@ -191,6 +203,7 @@ Table X reports the results for the final 252-date network. This network had a h
 
 \begin{table}[h]
 \centering
+\begin{adjustbox}{max width=\textwidth}
 \begin{tabular}{lccccc}
 \hline
 Contract & AV/MC & GCV/MC & NCV/MC & NCV/GCV & 95\% CI \\
@@ -204,6 +217,7 @@ Short maturity & 4.04 & 2,739.5 & 4,141.1 & 1.51 & [1.32, 1.73] \\
 Long maturity & 4.29 & 605.3 & 2,015.2 & 3.33 & [2.87, 3.86] \\
 \hline
 \end{tabular}
+\end{adjustbox}
 \end{table}
 
 NCV clearly outperformed GCV for the reference, high-volatility, short-maturity and long-maturity contracts. Its largest relative advantage occurred for the long-maturity contract, where its observation variance was approximately 3.33 times lower than that of GCV.
@@ -220,6 +234,7 @@ Table X summarises the measured runtimes. Standalone runtime includes both setup
 
 \begin{table}[h]
 \centering
+\begin{adjustbox}{max width=\textwidth}
 \begin{tabular}{lccccc}
 \hline
 Monitoring dates & GCV standalone & NCV standalone & GCV marginal pricing & NCV marginal pricing & Matched-accuracy break-even \\
@@ -228,6 +243,7 @@ Monitoring dates & GCV standalone & NCV standalone & GCV marginal pricing & NCV 
 252 & 1.1--1.4 s & 37--41 s & 1.12--1.34 s & 0.80--0.98 s & 40--101 valuations \\
 \hline
 \end{tabular}
+\end{adjustbox}
 \end{table}
 
 For the 12-date profile, training the neural network required approximately 29.5--29.9 seconds. A standalone NCV valuation was therefore considerably slower than GCV, which required less than 0.06 seconds. NCV was also slightly slower when both methods used the same number of pricing observations. Its marginal pricing time was approximately 0.055--0.058 seconds, compared with 0.046--0.052 seconds for GCV.
@@ -236,6 +252,7 @@ The computational advantage of the 12-date NCV came from its substantially lower
 
 \begin{table}[h]
 \centering
+\begin{adjustbox}{max width=\textwidth}
 \begin{tabular}{lc}
 \hline
 Contract & Matched-accuracy break-even \\
@@ -249,6 +266,7 @@ Short maturity & 694 \\
 Long maturity & 609 \\
 \hline
 \end{tabular}
+\end{adjustbox}
 \end{table}
 
 At 1,000 repeated valuations, the projected runtime saving from using NCV rather than GCV was approximately 26\%--37\%.
@@ -280,6 +298,7 @@ A value greater than one means that the reused neural control produced lower var
 
 \begin{table}[h]
 \centering
+\begin{adjustbox}{max width=\textwidth}
 \begin{tabular}{lcccc}
 \hline
 Target contract & $\beta=1$, 12 dates & Estimated $\beta$, 12 dates & $\beta=1$, 252 dates & Estimated $\beta$, 252 dates \\
@@ -292,6 +311,7 @@ Short maturity & 0.0016 & 0.8410 & 0.0016 & 0.6436 \\
 Long maturity & 0.0155 & 1.8304 & 0.0153 & 1.3693 \\
 \hline
 \end{tabular}
+\end{adjustbox}
 \end{table}
 
 Reusing the network with $\beta=1$ performed poorly under both monitoring profiles. None of the fixed-coefficient controls outperformed GCV. Under the 252-date profile, fixed-coefficient reuse also performed worse than standard Monte Carlo for the high-strike contract.

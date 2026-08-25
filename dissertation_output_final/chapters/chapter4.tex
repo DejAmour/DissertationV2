@@ -97,7 +97,16 @@ H_\theta(Z)
 W_{2,i}\max(A_i,0)+b_2.
 \]
 
-% Insert the neural-network architecture diagram here.
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[
+        width=0.9\textwidth,
+        height=0.4\textheight,
+        keepaspectratio
+    ]{figures/neural_control_architecture.png}
+    \caption{Architecture of the neural control variate.}
+    \label{fig:neural-control-architecture}
+\end{figure}
 
 The network output is trained to follow changes in the discounted payoff \(f(Z)\). It does not need to reproduce the payoff perfectly. For use as a control variate, it only needs to explain enough of the payoff variation to reduce the variance of the final estimator.
 
