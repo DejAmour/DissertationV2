@@ -1,0 +1,64 @@
+\chapter{Limitations and Conclusion}
+
+\section{Limitations}
+
+The results are conditional on the risk-neutral GBM model. GBM provides a controlled setting in which paths can be simulated exactly and the geometric Asian option price is available analytically. However, the conclusions may change under models containing stochastic volatility, jumps or other features not represented by GBM.
+
+The experiments considered only arithmetic Asian call options and a grid of seven contracts. Strike, volatility and maturity were changed separately, so the study did not examine contracts in which several parameters changed simultaneously. The effectiveness of the methods should therefore not be assumed to extend to every option-pricing problem.
+
+The network sensitivity analysis was also limited to one shallow ReLU architecture, three hidden widths and three training-sample sizes. The selected networks were the best configurations tested rather than globally optimal networks. Since NCV performance was sensitive to the amount of training data and the size of the network, other architectures or training procedures could produce different results.
+
+The 12-date and 252-date results should not be interpreted as showing that monitoring frequency alone caused the difference in performance. Changing the number of monitoring dates also changed the payoff, the number of network inputs and the selected network configuration.
+
+The break-even calculations assume that the trained network remains suitable for repeated valuations. In practice, changes in spot price, volatility, interest rates or time to maturity may create a different pricing problem. The reuse experiment showed that a fixed network generally did not transfer successfully using only a new control coefficient. The reported break-even points therefore demonstrate the potential benefit of repeated use, but they do not establish that these savings would always be achieved in practice.
+
+Finally, GCV provides an unusually strong benchmark for arithmetic Asian options under GBM. This makes the comparison demanding, but also specific to a pricing problem for which a highly effective analytical control is available. The relative value of NCV may be different for payoffs or pricing models where no comparable classical control exists.
+
+\section{Future research}
+
+The most important extension would be to develop a neural control that can be used across a wider range of contracts. Rather than training the network using only the simulated shocks, strike, volatility, maturity, interest rate and spot price could also be included as inputs. The network could then be trained across a range of contract and market conditions instead of being fitted to one fixed pricing problem.
+
+This would allow a larger network to be trained in advance, possibly during periods when computational demand is lower, and then used for valuations as market conditions change. A small target-specific pilot sample could still be used to estimate the control coefficient. Provided that the same shallow ReLU architecture is retained and the contract parameters are fixed during each valuation, the network's expected output would remain analytically available. Further work would be required to determine whether this remains practical for more flexible architectures.
+
+A second approach would be to partially retrain an existing network for a new contract. This may require fewer simulated paths and less time than training a new network from the beginning. The performance and cost of partial retraining could then be compared with direct reuse, contract-specific training and GCV.
+
+The analysis could also be extended beyond GBM and arithmetic Asian calls. Testing the method under stochastic-volatility or jump models would show whether the results remain valid in a more complicated pricing setting. Other path-dependent derivatives could be considered, particularly where no analytical control as effective as the geometric Asian option is available.
+
+Finally, a wider network-selection study could examine additional architectures, training-sample sizes, regularisation methods and optimisation procedures. This would help determine whether the configurations used in this dissertation can be improved and how much training data are required as the dimension of the pricing problem increases.
+
+\section{Conclusion}
+
+This dissertation examined whether neural control variates can improve the statistical and computational efficiency of Monte Carlo pricing for arithmetic Asian options. Standard Monte Carlo, antithetic variates, the geometric control variate and a neural control variate were compared using both 12-date and 252-date monitoring profiles.
+
+The contract-specific NCV produced the greatest average variance reduction across the tested contracts. Its advantage over GCV was particularly strong for the 12-date profile. For the 252-date profile, it clearly outperformed GCV for four contracts. For the remaining three contracts, the point estimates favoured NCV, but the results did not establish a clear difference between the methods. The sensitivity analysis also showed that this performance depended on selecting a suitable network size and providing sufficient training data.
+
+The computational results were more conditional. GCV was the more efficient method for a one-off valuation because it required very little setup. Once the neural network had been trained, however, NCV could provide a more efficient valuation at a matched level of accuracy. Its initial training cost could therefore be justified when the same network was used sufficiently many times.
+
+The reuse experiments showed that a network trained for one contract did not generally remain competitive with GCV when transferred to other contracts using only a new control coefficient. The long-maturity contract was the exception, with reuse outperforming GCV under both monitoring profiles. The practical benefit of NCV is therefore currently greatest when the same pricing problem is repeated, rather than when contract or market parameters change frequently.
+
+Overall, neural control variates are not a replacement for simpler variance-reduction techniques for pricing arithmetic Asian options under GBM. They can provide substantial statistical and computational benefits when an accurately trained network is already available and can be used repeatedly. For isolated valuations, or where frequent changes require the network to be retrained, GCV remains the more practical method.
+
+\chapter*{References}
+\addcontentsline{toc}{chapter}{References}
+
+\noindent Black, F. and Scholes, M. (1973) ``The pricing of options and corporate liabilities'', \textit{Journal of Political Economy}, 81(3), pp. 637--654. doi: 10.1086/260062.\\[1ex]
+
+\noindent Boyle, P.P. (1977) ``Options: A Monte Carlo approach'', \textit{Journal of Financial Economics}, 4(3), pp. 323--338. doi: 10.1016/0304-405X(77)90005-8.\\[1ex]
+
+\noindent Cont, R. (2001) ``Empirical properties of asset returns: Stylized facts and statistical issues'', \textit{Quantitative Finance}, 1(2), pp. 223--236. doi: 10.1080/713665670.\\[1ex]
+
+\noindent El Filali Ech-Chafiq, Z., Lelong, J. and Reghai, A. (2021) ``Automatic control variates for option pricing using neural networks'', \textit{Monte Carlo Methods and Applications}, 27(2), pp. 91--104. doi: 10.1515/mcma-2020-2081.\\[1ex]
+
+\noindent Glasserman, P. (2004) \textit{Monte Carlo Methods in Financial Engineering}. New York: Springer. doi: 10.1007/978-0-387-21617-1.\\[1ex]
+
+\noindent Hammersley, J.M. and Morton, K.W. (1956) ``A new Monte Carlo technique: Antithetic variates'', \textit{Proceedings of the Cambridge Philosophical Society}, 52(3), pp. 449--475. doi: 10.1017/S0305004100031455.\\[1ex]
+
+\noindent Heston, S.L. (1993) ``A closed-form solution for options with stochastic volatility with applications to bond and currency options'', \textit{The Review of Financial Studies}, 6(2), pp. 327--343. doi: 10.1093/rfs/6.2.327.\\[1ex]
+
+\noindent Kemna, A.G.Z. and Vorst, A.C.F. (1990) ``A pricing method for options based on average asset values'', \textit{Journal of Banking \& Finance}, 14(1), pp. 113--129. doi: 10.1016/0378-4266(90)90039-5.\\[1ex]
+
+\noindent Merton, R.C. (1973) ``Theory of rational option pricing'', \textit{The Bell Journal of Economics and Management Science}, 4(1), pp. 141--183. doi: 10.2307/3003143.\\[1ex]
+
+\noindent Merton, R.C. (1976) ``Option pricing when underlying stock returns are discontinuous'', \textit{Journal of Financial Economics}, 3(1--2), pp. 125--144. doi: 10.1016/0304-405X(76)90022-2.\\[1ex]
+
+\noindent Schwartz, E.S. (1997) ``The stochastic behavior of commodity prices: Implications for valuation and hedging'', \textit{The Journal of Finance}, 52(3), pp. 923--973. doi: 10.1111/j.1540-6261.1997.tb02721.x.
