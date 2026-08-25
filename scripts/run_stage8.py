@@ -63,6 +63,25 @@ PROFILES = {
         "requires_torch": True,
         "description": "Expanded-training follow-up: m=252, 20k NCV training paths, 5 reps",
     },
+    "m252_w16_n20000_r10_final": {
+        "n_training": 20_000,
+        "n_validation": 10_000,
+        "n_pilot": 1_000,
+        "n_pricing": 50_000,
+        "n_replications": 10,
+        "n_high_precision": 500_000,
+        "amortised_q_values": [1, 5, 10, 25, 50, 100, 250, 500, 1000],
+        "monitoring_dates": 252,
+        "hidden_width": 16,
+        "include_transfer_methods": False,
+        "ncv_epoch": 200,
+        "ncv_epoch_source": "capacity_and_data_sensitivity_best_tested_configuration",
+        "run_stem": "stage8_m252_w16_n20000_r10_final",
+        "experiment_role": "final_selected_m252_width16_network_stage8",
+        "follow_up_label": "final_selected_configuration_width16_m252_n20000_r10",
+        "requires_torch": True,
+        "description": "Final selected configuration: m=252, width=16, 20k NCV training paths, 10 reps",
+    },
 }
 
 SEED_OFFSET_REF_TRAIN = 1_000
@@ -79,6 +98,13 @@ STAGE8_NCV_EPOCH_SOURCE = "training_curve_validation_tuning"
 STAGE8_EXPERIMENT_ROLE = "primary_stage8_final_evaluation"
 STAGE8_HIDDEN_WIDTH = 32
 FINAL_EVALUATION_SEED_NAMESPACE_OFFSET = 10_000_000
+
+
+def _methods_for_contract(contract_id: str, include_transfer_methods: bool = True) -> List[str]:
+    methods = list(BASE_METHODS)
+    if include_transfer_methods and contract_id in TARGET_IDS:
+        methods.extend(TRANSFER_METHODS)
+    return methods
 
 
 def _replication_seeds(base_seed: int, replication: int) -> dict:
@@ -219,6 +245,7 @@ def _run_ncv_scratch(
     train_seed: int,
     pricing_seed: int,
     n_pricing: int,
+    hidden_width: int,
     ncv_epoch: int,
     ncv_epoch_source: str,
 ) -> dict:
@@ -236,7 +263,7 @@ def _run_ncv_scratch(
 
     t_opt = time.perf_counter()
     dataset = {"X_train": z_train, "y_train": train_payoffs}
-    network = build_network(train_cfg, hidden_width=STAGE8_HIDDEN_WIDTH)
+    network = build_network(train_cfg, hidden_width=hidden_width)
     train_network(network, dataset, train_cfg, n_epochs=ncv_epoch)
     optimizer_runtime = time.perf_counter() - t_opt
     train_runtime = data_generation_runtime + optimizer_runtime
@@ -282,13 +309,10 @@ def _run_ncv_scratch(
     }
 
 
-def _expected_method_rows_per_replication() -> List[Tuple[str, str]]:
+def _expected_method_rows_per_replication(include_transfer_methods: bool = True) -> List[Tuple[str, str]]:
     rows: List[Tuple[str, str]] = []
     for cid in CONTRACT_IDS:
-        for m in BASE_METHODS:
-            rows.append((cid, m))
-    for cid in TARGET_IDS:
-        for m in TRANSFER_METHODS:
+        for m in _methods_for_contract(cid, include_transfer_methods=include_transfer_methods):
             rows.append((cid, m))
     return rows
 
@@ -334,6 +358,8 @@ def run_replication(
     n_pricing: int,
     torch_available: bool,
     monitoring_dates: int,
+    hidden_width: int,
+    include_transfer_methods: bool,
     ncv_epoch: int,
     ncv_epoch_source: str,
     experiment_role: str,
@@ -374,7 +400,7 @@ def run_replication(
                 ref_cfg,
                 n_training=n_training,
                 train_seed=seeds["ref_train"],
-                hidden_width=STAGE8_HIDDEN_WIDTH,
+                hidden_width=hidden_width,
                 n_epochs=ncv_epoch,
             )
             shared_training_row.update(
@@ -588,6 +614,7 @@ def run_replication(
                     train_seed=train_seed,
                     pricing_seed=pricing_seed,
                     n_pricing=n_pricing,
+                    hidden_width=hidden_width,
                     ncv_epoch=ncv_epoch,
                     ncv_epoch_source=ncv_epoch_source,
                 )
@@ -641,6 +668,9 @@ def run_replication(
             )
 
         if contract_id == REFERENCE_ID:
+            continue
+
+        if not include_transfer_methods:
             continue
 
         # Transfer beta=1
@@ -1133,6 +1163,7 @@ def aggregate_statistical_results(
     high_prec_rows: List[dict],
     variance_ratio_summary: List[dict],
     n_replications: int,
+    include_transfer_methods: bool = True,
 ) -> List[dict]:
     refs = {r["contract_id"]: r for r in high_prec_rows if not r.get("error")}
 
@@ -1148,7 +1179,11 @@ def aggregate_statistical_results(
     vrr_lookup = {(r["contract_id"], r["method"], r["comparator"]): r for r in variance_ratio_summary}
 
     rows: List[dict] = []
-    all_pairs = {(cid, m) for cid in CONTRACT_IDS for m in BASE_METHODS} | {(cid, m) for cid in TARGET_IDS for m in TRANSFER_METHODS}
+    all_pairs = {
+        (cid, method)
+        for cid in CONTRACT_IDS
+        for method in _methods_for_contract(cid, include_transfer_methods=include_transfer_methods)
+    }
 
     for cid, method in sorted(all_pairs):
         vals = grouped.get((cid, method), [])
@@ -1249,13 +1284,14 @@ def compute_equal_pricing_observations_summary(
     n_training: int,
     n_pilot: int,
     n_pricing: int,
+    include_transfer_methods: bool = True,
 ) -> List[dict]:
     agg = {(r["contract_id"], r["method"]): r for r in aggregate_rows}
     vrr = {(r["contract_id"], r["method"], r["comparator"]): r for r in variance_ratio_summary}
 
     rows: List[dict] = []
     for cid in CONTRACT_IDS:
-        methods = list(BASE_METHODS) + (list(TRANSFER_METHODS) if cid in TARGET_IDS else [])
+        methods = _methods_for_contract(cid, include_transfer_methods=include_transfer_methods)
         for method in methods:
             r = agg.get((cid, method), {})
             pricing_obs = r.get("pricing_observations_mean", r.get("pricing_observations", "NA"))
@@ -1383,6 +1419,7 @@ def compute_matched_accuracy_results(
     n_training: int,
     n_pilot: int,
     shared_train_runtime_median: Optional[float],
+    include_transfer_methods: bool = True,
 ) -> List[dict]:
     agg = {(r["contract_id"], r["method"]): r for r in aggregate_rows}
     rows: List[dict] = []
@@ -1397,7 +1434,7 @@ def compute_matched_accuracy_results(
             ("fixed_se_0.001", 0.001),
         ]
 
-        methods = list(BASE_METHODS) + (list(TRANSFER_METHODS) if cid in TARGET_IDS else [])
+        methods = _methods_for_contract(cid, include_transfer_methods=include_transfer_methods)
         for method in methods:
             obs_var = _safe_float(agg.get((cid, method), {}).get("mean_observation_variance"))
             rt_per_obs_median, rt_per_obs_mean = _runtime_per_observation(per_rep_rows, cid, method)
@@ -1605,13 +1642,14 @@ def compute_equal_budget_projected_results(
     n_pilot: int,
     budget: int,
     q_values: List[int],
+    include_transfer_methods: bool = True,
 ) -> List[dict]:
     agg = {(r["contract_id"], r["method"]): r for r in aggregate_rows}
     rows: List[dict] = []
 
     for Q in q_values:
         for cid in CONTRACT_IDS:
-            methods = list(BASE_METHODS) + (list(TRANSFER_METHODS) if cid in TARGET_IDS else [])
+            methods = _methods_for_contract(cid, include_transfer_methods=include_transfer_methods)
             for method in methods:
                 alloc = _equal_budget_allocation(method, budget, Q, n_training, n_pilot)
                 obs_var = _safe_float(agg.get((cid, method), {}).get("mean_observation_variance"))
@@ -1851,6 +1889,7 @@ def compute_break_even_tables(
     aggregate_rows: List[dict],
     matched_accuracy_rows: List[dict],
     shared_training_rows: List[dict],
+    include_transfer_methods: bool = True,
 ) -> Tuple[List[dict], List[dict], List[dict], List[dict]]:
     agg = {(r["contract_id"], r["method"]): r for r in aggregate_rows}
 
@@ -1879,11 +1918,26 @@ def compute_break_even_tables(
         tb_init = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA"), {}).get("setup_cost_s_median"))
         tb_init_mean = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA"), {}).get("setup_cost_s_mean"))
 
-        comparisons = [
-            ("NCV_SCRATCH", scratch_init, scratch_marg, scratch_init_mean, scratch_marg_mean),
-            ("NCV_TRANSFER_BETA1", tb1_init if tb1_init is not None else shared_train_median, tb1_marg, tb1_init_mean if tb1_init_mean is not None else shared_train_median, tb1_marg_mean),
-            ("NCV_TRANSFER_BETA", tb_init if tb_init is not None else shared_train_median, tb_marg, tb_init_mean if tb_init_mean is not None else shared_train_median, tb_marg_mean),
-        ]
+        comparisons = [("NCV_SCRATCH", scratch_init, scratch_marg, scratch_init_mean, scratch_marg_mean)]
+        if include_transfer_methods:
+            comparisons.extend(
+                [
+                    (
+                        "NCV_TRANSFER_BETA1",
+                        tb1_init if tb1_init is not None else shared_train_median,
+                        tb1_marg,
+                        tb1_init_mean if tb1_init_mean is not None else shared_train_median,
+                        tb1_marg_mean,
+                    ),
+                    (
+                        "NCV_TRANSFER_BETA",
+                        tb_init if tb_init is not None else shared_train_median,
+                        tb_marg,
+                        tb_init_mean if tb_init_mean is not None else shared_train_median,
+                        tb_marg_mean,
+                    ),
+                ]
+            )
         for method, init_c, marg, init_c_mean, marg_mean in comparisons:
             baseline_setup_components, baseline_marginal_components = _runtime_components_for_method("GCV")
             proposed_setup_components, proposed_marginal_components = _runtime_components_for_method(method)
@@ -2027,6 +2081,9 @@ def compute_break_even_tables(
     fixed_rows = _break_even_from_target("fixed_se_0.001")
 
     portfolio_rows: List[dict] = []
+    if not include_transfer_methods:
+        return equal_obs_rows, matched_rows, fixed_rows, portfolio_rows
+
     gcv_cycle = 0.0
     tb1_cycle = 0.0
     tb_cycle = 0.0
@@ -2428,6 +2485,8 @@ def run_stage8(
     )
     effective_ncv_epoch = ncv_epoch if ncv_epoch is not None else int(profile_cfg.get("ncv_epoch", STAGE8_FIXED_NCV_EPOCH))
     effective_ncv_epoch_source = ncv_epoch_source or str(profile_cfg.get("ncv_epoch_source", STAGE8_NCV_EPOCH_SOURCE))
+    effective_hidden_width = int(profile_cfg.get("hidden_width", STAGE8_HIDDEN_WIDTH))
+    effective_include_transfer_methods = bool(profile_cfg.get("include_transfer_methods", True))
     effective_experiment_role = (
         str(profile_cfg.get("experiment_role"))
         if experiment_role == STAGE8_EXPERIMENT_ROLE and profile_cfg.get("experiment_role")
@@ -2451,7 +2510,8 @@ def run_stage8(
     print(
         "Profile="
         f"{profile}, base_seed={base_seed}, replications={n_replications}, torch_available={torch_available}, "
-        f"monitoring_dates={effective_monitoring_dates}, ncv_epoch={effective_ncv_epoch}"
+        f"monitoring_dates={effective_monitoring_dates}, ncv_epoch={effective_ncv_epoch}, "
+        f"hidden_width={effective_hidden_width}, include_transfer_methods={effective_include_transfer_methods}"
     )
 
     config_snapshot = {
@@ -2467,8 +2527,9 @@ def run_stage8(
         "amortised_q_values": amortised_q_values,
         "n_high_precision": n_high_prec,
         "monitoring_dates": effective_monitoring_dates,
-        "hidden_width": STAGE8_HIDDEN_WIDTH,
-        "trainable_parameters": _trainable_parameter_count(effective_monitoring_dates, STAGE8_HIDDEN_WIDTH),
+        "hidden_width": effective_hidden_width,
+        "trainable_parameters": _trainable_parameter_count(effective_monitoring_dates, effective_hidden_width),
+        "include_transfer_methods": effective_include_transfer_methods,
         "fixed_ncv_epoch": effective_ncv_epoch,
         "ncv_epoch_source": effective_ncv_epoch_source,
         "experiment_role": effective_experiment_role,
@@ -2535,6 +2596,8 @@ def run_stage8(
             n_pricing=n_pricing,
             torch_available=torch_available,
             monitoring_dates=effective_monitoring_dates,
+            hidden_width=effective_hidden_width,
+            include_transfer_methods=effective_include_transfer_methods,
             ncv_epoch=effective_ncv_epoch,
             ncv_epoch_source=effective_ncv_epoch_source,
             experiment_role=effective_experiment_role,
@@ -2558,6 +2621,7 @@ def run_stage8(
         high_prec_rows=high_prec_rows,
         variance_ratio_summary=variance_ratio_summary,
         n_replications=n_replications,
+        include_transfer_methods=effective_include_transfer_methods,
     )
 
     runtime_summary_rows, aggregate_rows_with_runtime = _runtime_summary(
@@ -2576,6 +2640,7 @@ def run_stage8(
         n_training=n_training,
         n_pilot=n_pilot,
         n_pricing=n_pricing,
+        include_transfer_methods=effective_include_transfer_methods,
     )
     _write_csv(run_dir / "equal_pricing_observations_summary.csv", equal_obs_rows)
 
@@ -2585,6 +2650,7 @@ def run_stage8(
         n_pilot=n_pilot,
         budget=n_pricing,
         q_values=amortised_q_values,
+        include_transfer_methods=effective_include_transfer_methods,
     )
     _write_csv(run_dir / "equal_budget_projected_results.csv", equal_budget_rows)
 
@@ -2595,6 +2661,7 @@ def run_stage8(
         n_training=n_training,
         n_pilot=n_pilot,
         shared_train_runtime_median=shared_train_runtime_median,
+        include_transfer_methods=effective_include_transfer_methods,
     )
     _write_csv(run_dir / "matched_accuracy_results.csv", matched_rows)
 
@@ -2602,6 +2669,7 @@ def run_stage8(
         aggregate_rows=aggregate_rows_with_runtime,
         matched_accuracy_rows=matched_rows,
         shared_training_rows=shared_training_rows,
+        include_transfer_methods=effective_include_transfer_methods,
     )
     _write_csv(run_dir / "break_even_equal_observations.csv", break_even_equal_obs)
     _write_csv(run_dir / "break_even_matched_accuracy.csv", break_even_matched)
@@ -2613,7 +2681,7 @@ def run_stage8(
 
     transfer_summary_rows = []
     transfer_rows_valid = [r for r in all_beta if not r.get("error")]
-    for method in TRANSFER_METHODS:
+    for method in (TRANSFER_METHODS if effective_include_transfer_methods else tuple()):
         subset = [r for r in transfer_rows_valid if r.get("method") == method]
         betas = [_safe_float(r.get("estimated_beta")) for r in subset]
         betas = [b for b in betas if b is not None]
@@ -2677,8 +2745,8 @@ def run_stage8(
             "fixed_ncv_epoch": effective_ncv_epoch,
             "ncv_epoch_source": effective_ncv_epoch_source,
             "experiment_role": effective_experiment_role,
-            "hidden_width": STAGE8_HIDDEN_WIDTH,
-            "trainable_parameters": _trainable_parameter_count(effective_monitoring_dates, STAGE8_HIDDEN_WIDTH),
+            "hidden_width": effective_hidden_width,
+            "trainable_parameters": _trainable_parameter_count(effective_monitoring_dates, effective_hidden_width),
         }
         for r in aggregate_rows_with_runtime
     ]
@@ -2719,8 +2787,8 @@ def run_stage8(
 - base seed: {base_seed}
 - replications: {n_replications}
 - monitoring dates: {effective_monitoring_dates}
-- hidden width: {STAGE8_HIDDEN_WIDTH}
-- trainable parameters: {_trainable_parameter_count(effective_monitoring_dates, STAGE8_HIDDEN_WIDTH)}
+- hidden width: {effective_hidden_width}
+- trainable parameters: {_trainable_parameter_count(effective_monitoring_dates, effective_hidden_width)}
 - NCV training paths: {n_training}
 - NCV checkpoint: {effective_ncv_epoch}
 - experiment role: {effective_experiment_role}
