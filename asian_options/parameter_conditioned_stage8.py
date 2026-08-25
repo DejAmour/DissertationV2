@@ -16,7 +16,7 @@ from scipy.stats import t as _t_dist
 
 from asian_options.analytical import geometric_asian_call_price
 from asian_options.config import ModelConfig, collect_environment_metadata, seed_everything
-from asian_options.contracts import CONTRACT_GRID, CONTRACT_IDS, REFERENCE_ID
+from asian_options.contracts import CONTRACT_GRID, CONTRACT_IDS, REFERENCE_ID, make_contract_cfg
 from asian_options.frozen_transfer import compute_network_hash, train_reference_network
 from asian_options.neural_cv import (
     _ShallowNet,

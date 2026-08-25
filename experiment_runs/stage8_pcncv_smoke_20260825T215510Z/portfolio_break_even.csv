@@ -1,0 +1,5 @@
+method,baseline_method,baseline_setup_cost_s,baseline_marginal_cost_s,proposed_setup_cost_s,proposed_marginal_cost_s,break_even_q,failure_reason
+PCNCV_BETA1,GCV,0.0,0.00041396499966595,0.011177244999998948,6.531499820994213e-06,28,
+PCNCV_BETA,GCV,0.0,0.00041396499966595,0.011177244999998948,0.0008123749997821506,NA,proposed_marginal_above_baseline
+NCV_TRANSFER_BETA1,GCV,0.0,0.00041396499966595,0.005334004500014089,0.0005411490000142294,NA,proposed_marginal_above_baseline
+NCV_TRANSFER_BETA,GCV,0.0,0.00041396499966595,0.005334004500014089,0.0006549640000912405,NA,proposed_marginal_above_baseline
