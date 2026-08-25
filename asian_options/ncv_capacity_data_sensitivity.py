@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import dataclasses
+import itertools
 import json
 import math
 import statistics
@@ -80,7 +81,7 @@ class _CheckpointSnapshot:
     inference: dict[str, float]
 
 
-def _default_cells(profile: str) -> tuple[CapacityCell, ...]:
+def _default_cells(profile: str, *, dissertation_cell_set: str = "baseline") -> tuple[CapacityCell, ...]:
     p = profile.lower()
     if p == "smoke":
         return (
@@ -91,6 +92,26 @@ def _default_cells(profile: str) -> tuple[CapacityCell, ...]:
             CapacityCell("w32_n400", 32, 400),
         )
     if p == "dissertation":
+        cell_set = dissertation_cell_set.lower()
+        if cell_set == "missing_cells":
+            return (
+                CapacityCell("w8_n10000", 8, 10_000),
+                CapacityCell("w8_n20000", 8, 20_000),
+                CapacityCell("w16_n10000", 16, 10_000),
+                CapacityCell("w16_n20000", 16, 20_000),
+            )
+        if cell_set == "full_grid":
+            return (
+                CapacityCell("w8_n5000", 8, 5_000),
+                CapacityCell("w8_n10000", 8, 10_000),
+                CapacityCell("w8_n20000", 8, 20_000),
+                CapacityCell("w16_n5000", 16, 5_000),
+                CapacityCell("w16_n10000", 16, 10_000),
+                CapacityCell("w16_n20000", 16, 20_000),
+                CapacityCell("w32_n5000", 32, 5_000),
+                CapacityCell("w32_n10000", 32, 10_000),
+                CapacityCell("w32_n20000", 32, 20_000),
+            )
         return (
             CapacityCell("w32_n5000", 32, 5_000),
             CapacityCell("w16_n5000", 16, 5_000),
@@ -101,7 +122,12 @@ def _default_cells(profile: str) -> tuple[CapacityCell, ...]:
     raise ValueError(f"unknown profile: {profile}")
 
 
-def profile_config(profile: str, output_dir: str, base_seed: int = 42) -> CapacityDataConfig:
+def profile_config(
+    profile: str,
+    output_dir: str,
+    base_seed: int = 42,
+    dissertation_cell_set: str = "baseline",
+) -> CapacityDataConfig:
     p = profile.lower()
     if p == "smoke":
         return CapacityDataConfig(
@@ -116,7 +142,7 @@ def profile_config(profile: str, output_dir: str, base_seed: int = 42) -> Capaci
             learning_rate=1e-2,
             train_batch_size=256,
             pricing_observations_for_reporting=500,
-            cells=_default_cells("smoke"),
+            cells=_default_cells("smoke", dissertation_cell_set="baseline"),
             output_dir=output_dir,
         )
     if p == "dissertation":
@@ -132,7 +158,7 @@ def profile_config(profile: str, output_dir: str, base_seed: int = 42) -> Capaci
             learning_rate=1e-2,
             train_batch_size=256,
             pricing_observations_for_reporting=50_000,
-            cells=_default_cells("dissertation"),
+            cells=_default_cells("dissertation", dissertation_cell_set=dissertation_cell_set),
             output_dir=output_dir,
         )
     raise ValueError(f"unknown profile: {profile}")
@@ -588,6 +614,26 @@ def _build_paired_contrasts(
     return out
 
 
+def _default_paired_comparisons(cells: tuple[CapacityCell, ...]) -> list[tuple[str, str]]:
+    by_key = {(int(c.hidden_width), int(c.train_paths)): c.config_id for c in cells}
+    by_train: dict[int, list[int]] = {}
+    by_width: dict[int, list[int]] = {}
+    for c in cells:
+        by_train.setdefault(int(c.train_paths), []).append(int(c.hidden_width))
+        by_width.setdefault(int(c.hidden_width), []).append(int(c.train_paths))
+
+    out: list[tuple[str, str]] = []
+    for n in sorted(by_train):
+        widths = sorted(set(by_train[n]))
+        for wl, wr in itertools.combinations(widths, 2):
+            out.append((by_key[(wl, n)], by_key[(wr, n)]))
+    for w in sorted(by_width):
+        sizes = sorted(set(by_width[w]))
+        for nl, nr in itertools.combinations(sizes, 2):
+            out.append((by_key[(w, nr)], by_key[(w, nl)]))
+    return out
+
+
 def _build_checkpoint_summary(rows: list[dict[str, Any]], config: CapacityDataConfig) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for cell in config.cells:
@@ -696,13 +742,8 @@ def _plot_summary(run_dir: Path, rows: list[dict[str, Any]], selected: dict[str,
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
     cells = [c.config_id for c in config.cells]
-    colors = {
-        cells[0]: "#1f77b4",
-        cells[1]: "#ff7f0e",
-        cells[2]: "#2ca02c",
-        cells[3]: "#d62728",
-        cells[4]: "#9467bd",
-    }
+    palette = list(plt.cm.tab10.colors) + list(plt.cm.Set3.colors) + list(plt.cm.Dark2.colors)
+    colors = {cid: palette[i % len(palette)] for i, cid in enumerate(cells)}
 
     # Panel 1: train/val/test MSE curves by configuration
     ax = axes[0, 0]
@@ -854,61 +895,23 @@ def _build_handover(
     extension_recommended: bool,
     validation_report: dict[str, Any],
 ) -> str:
-    selected_map = {row["config_id"]: row["selected_checkpoint"] for row in selected_rows}
-
-    def _find_metric(comp: str, metric: str) -> dict[str, Any]:
-        for row in paired_rows:
-            if row["comparison"] == comp and row["metric"] == metric:
-                return row
-        return {}
-
-    def _fmt(v: Any) -> str:
-        if isinstance(v, float):
-            return f"{v:.6g}" if math.isfinite(v) else "NA"
-        return str(v)
-
-    if config.profile == "smoke":
-        width16_id = "w16_n100_vs_w32_n100"
-        width8_id = "w8_n100_vs_w32_n100"
-        data10_id = "w32_n200_vs_w32_n100"
-        data20_id = "w32_n400_vs_w32_n100"
-    else:
-        width16_id = "w16_n5000_vs_w32_n5000"
-        width8_id = "w8_n5000_vs_w32_n5000"
-        data10_id = "w32_n10000_vs_w32_n5000"
-        data20_id = "w32_n20000_vs_w32_n5000"
-
-    width16_vs_32 = _find_metric(width16_id, "paired_log_ratio_test_residual_variance")
-    width8_vs_32 = _find_metric(width8_id, "paired_log_ratio_test_residual_variance")
-    data10_vs_5 = _find_metric(data10_id, "paired_log_ratio_test_residual_variance")
-    data20_vs_5 = _find_metric(data20_id, "paired_log_ratio_test_residual_variance")
-
     lines: list[str] = []
     lines.append("# NCV Capacity-vs-Data Sensitivity Handover")
     lines.append("")
-    lines.append("## Exact experiment completed")
-    lines.append(
-        f"Additive sensitivity run for m={config.monitoring_dates} on the reference arithmetic Asian call, "
-        f"comparing five fixed cells (profile={config.profile}) with one continuous training trajectory per replication and checkpoints {list(config.checkpoints)}."
-    )
+    lines.append("## Experiment")
+    lines.append(f"- profile={config.profile}")
+    lines.append(f"- replications={config.replications}")
+    lines.append(f"- monitoring_dates={config.monitoring_dates}")
+    lines.append(f"- checkpoints={list(config.checkpoints)}")
+    lines.append(f"- configurations={len(config.cells)}")
     lines.append("")
     lines.append("## Selected checkpoints by configuration")
     for row in selected_rows:
         lines.append(f"- {row['config_id']}: checkpoint {row['selected_checkpoint']}")
     lines.append("")
-    lines.append("## Sensitivity conclusions (descriptive)")
-    lines.append(
-        "- Whether reducing width improved held-out performance: "
-        f"{width16_id} mean={_fmt(width16_vs_32.get('mean'))}; "
-        f"{width8_id} mean={_fmt(width8_vs_32.get('mean'))}."
-    )
-    lines.append(
-        "- Whether increasing training data improved held-out performance: "
-        f"{data10_id} mean={_fmt(data10_vs_5.get('mean'))}; "
-        f"{data20_id} mean={_fmt(data20_vs_5.get('mean'))}."
-    )
-    lines.append("- Whether the generalisation gap narrowed: see paired metric `paired_difference_log_generalization_gap` in capacity_data_paired_contrasts.csv.")
-    lines.append("- Consistency across replications: inspect 95% CIs and medians in capacity_data_paired_contrasts.csv.")
+    lines.append("## Paired-contrast outputs")
+    lines.append(f"- paired contrast rows: {len(paired_rows)}")
+    lines.append("- See capacity_data_paired_contrasts.csv for means, medians, and 95% confidence intervals.")
     lines.append("")
     lines.append(f"## Epoch-200 extension flag\n- extension_recommended={str(bool(extension_recommended)).lower()}")
     lines.append("")
@@ -924,10 +927,14 @@ def _build_handover(
     return "\n".join(lines)
 
 
-def run_capacity_data_sensitivity(config: CapacityDataConfig) -> Path:
+def run_capacity_data_sensitivity(
+    config: CapacityDataConfig,
+    *,
+    gcv_benchmark_rows: list[dict[str, Any]] | None = None,
+) -> Path:
     _validate_checkpoints(config.checkpoints)
-    if len(config.cells) != 5:
-        raise ValueError("experiment must run exactly five configurations")
+    if len(config.cells) < 1:
+        raise ValueError("experiment must run at least one configuration")
 
     seed_everything(config.base_seed)
     torch = __import__("torch")
@@ -959,6 +966,12 @@ def run_capacity_data_sensitivity(config: CapacityDataConfig) -> Path:
 
     per_replication_rows: list[dict[str, Any]] = []
     gcv_rows: list[dict[str, Any]] = []
+    gcv_rows_by_rep_split: dict[tuple[int, str], dict[str, Any]] = {}
+    if gcv_benchmark_rows is not None:
+        for row in gcv_benchmark_rows:
+            rep = int(row["replication"])
+            split = str(row["split"])
+            gcv_rows_by_rep_split[(rep, split)] = dict(row)
 
     training_sizes = sorted(set(int(cell.train_paths) for cell in config.cells))
     all_nested_rows: list[dict[str, Any]] = []
@@ -994,27 +1007,48 @@ def run_capacity_data_sensitivity(config: CapacityDataConfig) -> Path:
         all_nested_rows.extend(nested_rows)
         nested_ok_per_rep.append(bool(nested_diag["training_nested_prefix_ok"]))
 
-        gcv_for_rep = compute_gcv_benchmark(
-            validation_split=val_split,
-            test_split=test_split,
-            pilot_split=pilot_split,
-            n_reporting=config.pricing_observations_for_reporting,
-        )
-        for row in gcv_for_rep:
-            gcv_rows.append(
-                {
-                    "replication": rep,
-                    "split": row["split"],
-                    "train_seed": rep_seeds["train"],
-                    "validation_seed": rep_seeds["validation"],
-                    "test_seed": rep_seeds["test"],
-                    "pilot_seed": rep_seeds["pilot"],
-                    "validation_paths": config.validation_paths,
-                    "test_paths": config.test_paths,
-                    "pilot_paths": config.pilot_paths,
-                    **row,
-                }
+        if gcv_rows_by_rep_split:
+            for split in ("validation", "test"):
+                key = (rep, split)
+                if key not in gcv_rows_by_rep_split:
+                    raise RuntimeError(f"missing reused GCV row for replication={rep} split={split}")
+                row = dict(gcv_rows_by_rep_split[key])
+                row.update(
+                    {
+                        "replication": rep,
+                        "split": split,
+                        "train_seed": rep_seeds["train"],
+                        "validation_seed": rep_seeds["validation"],
+                        "test_seed": rep_seeds["test"],
+                        "pilot_seed": rep_seeds["pilot"],
+                        "validation_paths": config.validation_paths,
+                        "test_paths": config.test_paths,
+                        "pilot_paths": config.pilot_paths,
+                    }
+                )
+                gcv_rows.append(row)
+        else:
+            gcv_for_rep = compute_gcv_benchmark(
+                validation_split=val_split,
+                test_split=test_split,
+                pilot_split=pilot_split,
+                n_reporting=config.pricing_observations_for_reporting,
             )
+            for row in gcv_for_rep:
+                gcv_rows.append(
+                    {
+                        "replication": rep,
+                        "split": row["split"],
+                        "train_seed": rep_seeds["train"],
+                        "validation_seed": rep_seeds["validation"],
+                        "test_seed": rep_seeds["test"],
+                        "pilot_seed": rep_seeds["pilot"],
+                        "validation_paths": config.validation_paths,
+                        "test_paths": config.test_paths,
+                        "pilot_paths": config.pilot_paths,
+                        **row,
+                    }
+                )
 
         for cell in config.cells:
             print(f"[capacity-data] rep={rep+1}/{config.replications} config={cell.config_id}", flush=True)
@@ -1041,7 +1075,8 @@ def run_capacity_data_sensitivity(config: CapacityDataConfig) -> Path:
                 raise RuntimeError(
                     f"parameter count mismatch for {cell.config_id}: model={p_count} formula={p_formula}"
                 )
-            ratio = p_count / float(cell.train_paths)
+            parameters_per_training_path = p_count / float(cell.train_paths)
+            paths_per_parameter = float(cell.train_paths) / p_count
 
             train_gen_runtime = float(nested_diag["generation_runtime_by_size_s"][str(cell.train_paths)])
             val_tuning_overhead = float(validation_generation_overhead_s)
@@ -1078,7 +1113,9 @@ def run_capacity_data_sensitivity(config: CapacityDataConfig) -> Path:
                             "hidden_width": int(cell.hidden_width),
                             "parameter_count": int(p_count),
                             "parameter_count_formula": int(p_formula),
-                            "parameter_to_training_path_ratio": float(ratio),
+                            "parameter_to_training_path_ratio": float(parameters_per_training_path),
+                            "parameters_per_training_path": float(parameters_per_training_path),
+                            "paths_per_parameter": float(paths_per_parameter),
                             "mse": float(mse),
                             "payoff_mean": float(diag["arithmetic_payoff_mean"]),
                             "network_output_mean": float(diag["network_output_mean"]),
@@ -1108,23 +1145,7 @@ def run_capacity_data_sensitivity(config: CapacityDataConfig) -> Path:
 
     selected_rows, selected_by_config = _selected_checkpoints(per_replication_rows, config)
 
-    comparisons = [
-        ("w16_n5000", "w32_n5000"),
-        ("w8_n5000", "w32_n5000"),
-        ("w32_n10000", "w32_n5000"),
-        ("w32_n20000", "w32_n5000"),
-        ("w16_n5000", "w32_n10000"),
-        ("w8_n5000", "w32_n20000"),
-    ]
-    if config.profile == "smoke":
-        comparisons = [
-            ("w16_n100", "w32_n100"),
-            ("w8_n100", "w32_n100"),
-            ("w32_n200", "w32_n100"),
-            ("w32_n400", "w32_n100"),
-            ("w16_n100", "w32_n200"),
-            ("w8_n100", "w32_n400"),
-        ]
+    comparisons = _default_paired_comparisons(config.cells)
 
     paired_rows = _build_paired_contrasts(per_replication_rows, selected_by_config, comparisons)
     checkpoint_summary = _build_checkpoint_summary(per_replication_rows, config)
@@ -1210,6 +1231,11 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Run NCV capacity-vs-data m=252 sensitivity experiment"
     )
     p.add_argument("--profile", choices=["smoke", "dissertation"], default="smoke")
+    p.add_argument(
+        "--dissertation-cell-set",
+        choices=["baseline", "missing_cells", "full_grid"],
+        default="baseline",
+    )
     p.add_argument("--output-dir", default="experiment_runs")
     p.add_argument("--base-seed", type=int, default=42)
     return p
@@ -1217,7 +1243,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = _build_parser().parse_args()
-    cfg = profile_config(args.profile, output_dir=args.output_dir, base_seed=args.base_seed)
+    cfg = profile_config(
+        args.profile,
+        output_dir=args.output_dir,
+        base_seed=args.base_seed,
+        dissertation_cell_set=args.dissertation_cell_set,
+    )
     out = run_capacity_data_sensitivity(cfg)
     print(f"NCV capacity-data sensitivity output: {out.resolve()}")
 

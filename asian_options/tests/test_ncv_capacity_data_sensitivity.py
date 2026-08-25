@@ -11,6 +11,8 @@ from asian_options.ncv_capacity_data_sensitivity import (
     CapacityCell,
     CapacityDataConfig,
     _build_paired_contrasts,
+    _default_cells,
+    _default_paired_comparisons,
     _build_seed_manifest,
     _expected_parameter_count,
     _generate_nested_training_splits,
@@ -48,6 +50,25 @@ def test_profiles_have_exactly_five_configurations():
     ]
 
 
+def test_dissertation_missing_cells_configurations_are_present_and_unique():
+    cfg = profile_config("dissertation", output_dir="/tmp/out", base_seed=42, dissertation_cell_set="missing_cells")
+    assert [c.config_id for c in cfg.cells] == ["w8_n10000", "w8_n20000", "w16_n10000", "w16_n20000"]
+    assert len({c.config_id for c in cfg.cells}) == 4
+    assert {c.train_paths for c in cfg.cells} == {10_000, 20_000}
+    assert {c.hidden_width for c in cfg.cells} == {8, 16}
+
+
+def test_full_grid_cell_set_has_exactly_nine_unique_cells():
+    cells = _default_cells("dissertation", dissertation_cell_set="full_grid")
+    assert len(cells) == 9
+    assert len({c.config_id for c in cells}) == 9
+    assert {(c.hidden_width, c.train_paths) for c in cells} == {
+        (8, 5_000), (8, 10_000), (8, 20_000),
+        (16, 5_000), (16, 10_000), (16, 20_000),
+        (32, 5_000), (32, 10_000), (32, 20_000),
+    }
+
+
 def test_expected_parameter_counts_and_ratios_for_m252():
     m = 252
     cfg = _make_reference_cfg(monitoring_dates=m, n_paths=10, seed=1)
@@ -59,6 +80,10 @@ def test_expected_parameter_counts_and_ratios_for_m252():
         assert _expected_parameter_count(m, h) == expected
     assert math.isclose(4065 / 5000, 8129 / 10000, rel_tol=2e-3)
     assert math.isclose(2033 / 5000, 8129 / 20000, rel_tol=2e-3)
+    assert math.isclose(10_000 / 2033, 4.91884, rel_tol=1e-4)
+    assert math.isclose(20_000 / 2033, 9.83768, rel_tol=1e-4)
+    assert math.isclose(10_000 / 4065, 2.46002, rel_tol=1e-4)
+    assert math.isclose(20_000 / 4065, 4.92005, rel_tol=1e-4)
 
 
 def test_seed_generation_is_deterministic_and_no_hash_needed():
@@ -223,6 +248,33 @@ def test_paired_contrast_direction_is_unambiguous():
     assert lookup["paired_difference_test_mse"]["mean"] == -1.0
     assert lookup["paired_log_ratio_test_residual_variance"]["mean"] < 0.0
     assert lookup["paired_ratio_test_vrr"]["mean"] > 1.0
+
+
+def test_default_paired_comparisons_cover_full_grid():
+    cells = _default_cells("dissertation", dissertation_cell_set="full_grid")
+    pairs = _default_paired_comparisons(cells)
+    assert len(pairs) == 18
+    required = {
+        ("w8_n5000", "w16_n5000"),
+        ("w8_n5000", "w32_n5000"),
+        ("w16_n5000", "w32_n5000"),
+        ("w8_n10000", "w16_n10000"),
+        ("w8_n10000", "w32_n10000"),
+        ("w16_n10000", "w32_n10000"),
+        ("w8_n20000", "w16_n20000"),
+        ("w8_n20000", "w32_n20000"),
+        ("w16_n20000", "w32_n20000"),
+        ("w8_n10000", "w8_n5000"),
+        ("w8_n20000", "w8_n5000"),
+        ("w8_n20000", "w8_n10000"),
+        ("w16_n10000", "w16_n5000"),
+        ("w16_n20000", "w16_n5000"),
+        ("w16_n20000", "w16_n10000"),
+        ("w32_n10000", "w32_n5000"),
+        ("w32_n20000", "w32_n5000"),
+        ("w32_n20000", "w32_n10000"),
+    }
+    assert required.issubset(set(pairs))
 
 
 def test_student_t_ci_safe_for_n_less_than_two():
