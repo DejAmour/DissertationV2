@@ -1,0 +1,18 @@
+{
+  "combined_run_dir": "/home/runner/work/DissertationV2/DissertationV2/experiment_runs/capacity_data_missing_cells_m252/ncv_capacity_data_dissertation_20260825T093651Z/combined_full_grid_m252",
+  "combined_unique_cell_count": 9,
+  "combined_unique_cells": [
+    "w16_n10000",
+    "w16_n20000",
+    "w16_n5000",
+    "w32_n10000",
+    "w32_n20000",
+    "w32_n5000",
+    "w8_n10000",
+    "w8_n20000",
+    "w8_n5000"
+  ],
+  "created_at_utc": "2026-08-25T09:43:42.013171+00:00",
+  "existing_run_dir": "/home/runner/work/DissertationV2/DissertationV2/experiment_runs/ncv_capacity_data_dissertation_20260822T205712Z/ncv_capacity_data_m252",
+  "new_run_dir": "/home/runner/work/DissertationV2/DissertationV2/experiment_runs/capacity_data_missing_cells_m252/ncv_capacity_data_dissertation_20260825T093651Z/ncv_capacity_data_m252"
+}
