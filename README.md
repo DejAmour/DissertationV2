@@ -145,6 +145,7 @@ python scripts/run_stage8.py --profile smoke --output-dir experiment_runs
 python scripts/run_stage8.py --profile dissertation --output-dir experiment_runs
 python scripts/run_stage8.py --profile dissertation --output-dir experiment_runs --empirical-equal-budget
 python scripts/run_stage8.py --profile m252_w16_n20000_r10_final --output-dir experiment_runs
+python scripts/run_stage8.py --profile m252_w16_n20000_r10_frozen_reuse --output-dir experiment_runs
 ```
 
 Supported Stage 8 overrides (defaults preserved): `--monitoring-dates`,

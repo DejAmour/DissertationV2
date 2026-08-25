@@ -82,6 +82,26 @@ PROFILES = {
         "requires_torch": True,
         "description": "Final selected configuration: m=252, width=16, 20k NCV training paths, 10 reps",
     },
+    "m252_w16_n20000_r10_frozen_reuse": {
+        "n_training": 20_000,
+        "n_validation": 10_000,
+        "n_pilot": 1_000,
+        "n_pricing": 50_000,
+        "n_replications": 10,
+        "n_high_precision": 500_000,
+        "amortised_q_values": [1, 5, 10, 25, 50, 100, 250, 500, 1000],
+        "monitoring_dates": 252,
+        "hidden_width": 16,
+        "include_transfer_methods": True,
+        "include_scratch_ncv": False,
+        "ncv_epoch": 200,
+        "ncv_epoch_source": "capacity_and_data_sensitivity_best_tested_configuration",
+        "run_stem": "stage8_m252_w16_n20000_r10_frozen_reuse",
+        "experiment_role": "final_frozen_network_reuse_only_stage8",
+        "follow_up_label": "frozen_reference_network_reuse_only_width16_m252_n20000_r10",
+        "requires_torch": True,
+        "description": "Frozen-network reuse only: m=252, width=16, 20k NCV training paths, 10 reps",
+    },
 }
 
 SEED_OFFSET_REF_TRAIN = 1_000
@@ -100,8 +120,14 @@ STAGE8_HIDDEN_WIDTH = 32
 FINAL_EVALUATION_SEED_NAMESPACE_OFFSET = 10_000_000
 
 
-def _methods_for_contract(contract_id: str, include_transfer_methods: bool = True) -> List[str]:
-    methods = list(BASE_METHODS)
+def _methods_for_contract(
+    contract_id: str,
+    include_transfer_methods: bool = True,
+    include_scratch_ncv: bool = True,
+) -> List[str]:
+    methods = ["MC", "AV", "GCV"]
+    if include_scratch_ncv:
+        methods.append("NCV_SCRATCH")
     if include_transfer_methods and contract_id in TARGET_IDS:
         methods.extend(TRANSFER_METHODS)
     return methods
@@ -309,10 +335,17 @@ def _run_ncv_scratch(
     }
 
 
-def _expected_method_rows_per_replication(include_transfer_methods: bool = True) -> List[Tuple[str, str]]:
+def _expected_method_rows_per_replication(
+    include_transfer_methods: bool = True,
+    include_scratch_ncv: bool = True,
+) -> List[Tuple[str, str]]:
     rows: List[Tuple[str, str]] = []
     for cid in CONTRACT_IDS:
-        for m in _methods_for_contract(cid, include_transfer_methods=include_transfer_methods):
+        for m in _methods_for_contract(
+            cid,
+            include_transfer_methods=include_transfer_methods,
+            include_scratch_ncv=include_scratch_ncv,
+        ):
             rows.append((cid, m))
     return rows
 
@@ -358,11 +391,12 @@ def run_replication(
     n_pricing: int,
     torch_available: bool,
     monitoring_dates: int,
-    hidden_width: int,
-    include_transfer_methods: bool,
-    ncv_epoch: int,
-    ncv_epoch_source: str,
-    experiment_role: str,
+    hidden_width: int = STAGE8_HIDDEN_WIDTH,
+    include_transfer_methods: bool = True,
+    ncv_epoch: int = STAGE8_FIXED_NCV_EPOCH,
+    ncv_epoch_source: str = STAGE8_NCV_EPOCH_SOURCE,
+    experiment_role: str = STAGE8_EXPERIMENT_ROLE,
+    include_scratch_ncv: bool = True,
 ) -> Tuple[List[dict], List[dict], List[dict], dict]:
     seeds = _replication_seeds(base_seed, replication)
 
@@ -606,18 +640,52 @@ def run_replication(
             )
 
         # Scratch NCV
-        if torch_available:
-            try:
-                scratch = _run_ncv_scratch(
-                    base_cfg,
-                    n_training=n_training,
-                    train_seed=train_seed,
-                    pricing_seed=pricing_seed,
-                    n_pricing=n_pricing,
-                    hidden_width=hidden_width,
-                    ncv_epoch=ncv_epoch,
-                    ncv_epoch_source=ncv_epoch_source,
-                )
+        if include_scratch_ncv:
+            if torch_available:
+                try:
+                    scratch = _run_ncv_scratch(
+                        base_cfg,
+                        n_training=n_training,
+                        train_seed=train_seed,
+                        pricing_seed=pricing_seed,
+                        n_pricing=n_pricing,
+                        hidden_width=hidden_width,
+                        ncv_epoch=ncv_epoch,
+                        ncv_epoch_source=ncv_epoch_source,
+                    )
+                    per_rep_rows.append(
+                        {
+                            **_replication_base_row(
+                                base_seed,
+                                replication,
+                                contract_id,
+                                "NCV_SCRATCH",
+                                ncv_epoch,
+                                ncv_epoch_source,
+                                monitoring_dates,
+                                experiment_role,
+                            ),
+                            **scratch,
+                            "error": "",
+                        }
+                    )
+                except Exception as exc:
+                    per_rep_rows.append(
+                        {
+                            **_replication_base_row(
+                                base_seed,
+                                replication,
+                                contract_id,
+                                "NCV_SCRATCH",
+                                ncv_epoch,
+                                ncv_epoch_source,
+                                monitoring_dates,
+                                experiment_role,
+                            ),
+                            "error": str(exc),
+                        }
+                    )
+            else:
                 per_rep_rows.append(
                     {
                         **_replication_base_row(
@@ -630,42 +698,9 @@ def run_replication(
                             monitoring_dates,
                             experiment_role,
                         ),
-                        **scratch,
-                        "error": "",
+                        "error": "torch_not_available",
                     }
                 )
-            except Exception as exc:
-                per_rep_rows.append(
-                    {
-                        **_replication_base_row(
-                            base_seed,
-                            replication,
-                            contract_id,
-                            "NCV_SCRATCH",
-                            ncv_epoch,
-                            ncv_epoch_source,
-                            monitoring_dates,
-                            experiment_role,
-                        ),
-                        "error": str(exc),
-                    }
-                )
-        else:
-            per_rep_rows.append(
-                {
-                    **_replication_base_row(
-                        base_seed,
-                        replication,
-                        contract_id,
-                        "NCV_SCRATCH",
-                        ncv_epoch,
-                        ncv_epoch_source,
-                        monitoring_dates,
-                        experiment_role,
-                    ),
-                    "error": "torch_not_available",
-                }
-            )
 
         if contract_id == REFERENCE_ID:
             continue
@@ -1019,13 +1054,21 @@ def compute_all_high_precision_references(n_paths: int, base_seed: int, monitori
     return rows
 
 
-def _all_required_rows_present(per_rep_rows: List[dict], n_replications: int) -> Tuple[bool, List[str]]:
+def _all_required_rows_present(
+    per_rep_rows: List[dict],
+    n_replications: int,
+    include_transfer_methods: bool = True,
+    include_scratch_ncv: bool = True,
+) -> Tuple[bool, List[str]]:
     failures: List[str] = []
     lookup = defaultdict(list)
     for row in per_rep_rows:
         lookup[(row.get("replication"), row.get("contract_id"), row.get("method"))].append(row)
     for rep in range(n_replications):
-        for cid, method in _expected_method_rows_per_replication():
+        for cid, method in _expected_method_rows_per_replication(
+            include_transfer_methods=include_transfer_methods,
+            include_scratch_ncv=include_scratch_ncv,
+        ):
             k = (rep, cid, method)
             rows = lookup.get(k, [])
             if len(rows) != 1:
@@ -1033,9 +1076,19 @@ def _all_required_rows_present(per_rep_rows: List[dict], n_replications: int) ->
     return len(failures) == 0, failures
 
 
-def _check_required_success(per_rep_rows: List[dict], n_replications: int) -> Tuple[bool, List[str]]:
+def _check_required_success(
+    per_rep_rows: List[dict],
+    n_replications: int,
+    include_transfer_methods: bool = True,
+    include_scratch_ncv: bool = True,
+) -> Tuple[bool, List[str]]:
     failures: List[str] = []
-    ok_count, present_failures = _all_required_rows_present(per_rep_rows, n_replications)
+    ok_count, present_failures = _all_required_rows_present(
+        per_rep_rows,
+        n_replications,
+        include_transfer_methods=include_transfer_methods,
+        include_scratch_ncv=include_scratch_ncv,
+    )
     failures.extend(present_failures)
 
     for row in per_rep_rows:
@@ -1164,6 +1217,7 @@ def aggregate_statistical_results(
     variance_ratio_summary: List[dict],
     n_replications: int,
     include_transfer_methods: bool = True,
+    include_scratch_ncv: bool = True,
 ) -> List[dict]:
     refs = {r["contract_id"]: r for r in high_prec_rows if not r.get("error")}
 
@@ -1182,7 +1236,11 @@ def aggregate_statistical_results(
     all_pairs = {
         (cid, method)
         for cid in CONTRACT_IDS
-        for method in _methods_for_contract(cid, include_transfer_methods=include_transfer_methods)
+        for method in _methods_for_contract(
+            cid,
+            include_transfer_methods=include_transfer_methods,
+            include_scratch_ncv=include_scratch_ncv,
+        )
     }
 
     for cid, method in sorted(all_pairs):
@@ -1285,13 +1343,18 @@ def compute_equal_pricing_observations_summary(
     n_pilot: int,
     n_pricing: int,
     include_transfer_methods: bool = True,
+    include_scratch_ncv: bool = True,
 ) -> List[dict]:
     agg = {(r["contract_id"], r["method"]): r for r in aggregate_rows}
     vrr = {(r["contract_id"], r["method"], r["comparator"]): r for r in variance_ratio_summary}
 
     rows: List[dict] = []
     for cid in CONTRACT_IDS:
-        methods = _methods_for_contract(cid, include_transfer_methods=include_transfer_methods)
+        methods = _methods_for_contract(
+            cid,
+            include_transfer_methods=include_transfer_methods,
+            include_scratch_ncv=include_scratch_ncv,
+        )
         for method in methods:
             r = agg.get((cid, method), {})
             pricing_obs = r.get("pricing_observations_mean", r.get("pricing_observations", "NA"))
@@ -1420,6 +1483,7 @@ def compute_matched_accuracy_results(
     n_pilot: int,
     shared_train_runtime_median: Optional[float],
     include_transfer_methods: bool = True,
+    include_scratch_ncv: bool = True,
 ) -> List[dict]:
     agg = {(r["contract_id"], r["method"]): r for r in aggregate_rows}
     rows: List[dict] = []
@@ -1430,11 +1494,16 @@ def compute_matched_accuracy_results(
 
         targets = [
             ("match_gcv_50000_se", gcv_ref_se),
-            ("match_scratch_50000_se", scratch_ref_se),
             ("fixed_se_0.001", 0.001),
         ]
+        if include_scratch_ncv:
+            targets.insert(1, ("match_scratch_50000_se", scratch_ref_se))
 
-        methods = _methods_for_contract(cid, include_transfer_methods=include_transfer_methods)
+        methods = _methods_for_contract(
+            cid,
+            include_transfer_methods=include_transfer_methods,
+            include_scratch_ncv=include_scratch_ncv,
+        )
         for method in methods:
             obs_var = _safe_float(agg.get((cid, method), {}).get("mean_observation_variance"))
             rt_per_obs_median, rt_per_obs_mean = _runtime_per_observation(per_rep_rows, cid, method)
@@ -1643,13 +1712,18 @@ def compute_equal_budget_projected_results(
     budget: int,
     q_values: List[int],
     include_transfer_methods: bool = True,
+    include_scratch_ncv: bool = True,
 ) -> List[dict]:
     agg = {(r["contract_id"], r["method"]): r for r in aggregate_rows}
     rows: List[dict] = []
 
     for Q in q_values:
         for cid in CONTRACT_IDS:
-            methods = _methods_for_contract(cid, include_transfer_methods=include_transfer_methods)
+            methods = _methods_for_contract(
+                cid,
+                include_transfer_methods=include_transfer_methods,
+                include_scratch_ncv=include_scratch_ncv,
+            )
             for method in methods:
                 alloc = _equal_budget_allocation(method, budget, Q, n_training, n_pilot)
                 obs_var = _safe_float(agg.get((cid, method), {}).get("mean_observation_variance"))
@@ -1890,6 +1964,7 @@ def compute_break_even_tables(
     matched_accuracy_rows: List[dict],
     shared_training_rows: List[dict],
     include_transfer_methods: bool = True,
+    include_scratch_ncv: bool = True,
 ) -> Tuple[List[dict], List[dict], List[dict], List[dict]]:
     agg = {(r["contract_id"], r["method"]): r for r in aggregate_rows}
 
@@ -1918,7 +1993,9 @@ def compute_break_even_tables(
         tb_init = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA"), {}).get("setup_cost_s_median"))
         tb_init_mean = _safe_float(agg.get((cid, "NCV_TRANSFER_BETA"), {}).get("setup_cost_s_mean"))
 
-        comparisons = [("NCV_SCRATCH", scratch_init, scratch_marg, scratch_init_mean, scratch_marg_mean)]
+        comparisons = []
+        if include_scratch_ncv:
+            comparisons.append(("NCV_SCRATCH", scratch_init, scratch_marg, scratch_init_mean, scratch_marg_mean))
         if include_transfer_methods:
             comparisons.extend(
                 [
@@ -2272,6 +2349,7 @@ def _detect_runtime_regime_warnings(
 
 def _build_validation_report(
     per_rep_rows: List[dict],
+    shared_training_rows: List[dict],
     seed_manifest: List[dict],
     n_replications: int,
     base_seed: int,
@@ -2279,14 +2357,45 @@ def _build_validation_report(
     fixed_ncv_epoch: int,
     ncv_epoch_source: str,
     experiment_role: str,
+    include_transfer_methods: bool = True,
+    include_scratch_ncv: bool = True,
     runtime_regime_ratio_threshold: float = 2.0,
 ) -> dict:
     failures: List[str] = []
     warnings: List[str] = []
 
-    success_ok, row_failures = _check_required_success(per_rep_rows, n_replications)
+    success_ok, row_failures = _check_required_success(
+        per_rep_rows,
+        n_replications,
+        include_transfer_methods=include_transfer_methods,
+        include_scratch_ncv=include_scratch_ncv,
+    )
     if not success_ok:
         failures.extend(row_failures)
+
+    target_methods = _methods_for_contract(
+        TARGET_IDS[0],
+        include_transfer_methods=include_transfer_methods,
+        include_scratch_ncv=include_scratch_ncv,
+    )
+    expected_target_row_count = n_replications * len(TARGET_IDS) * len(target_methods)
+    actual_target_row_count = sum(1 for row in per_rep_rows if row.get("contract_id") in TARGET_IDS)
+    if actual_target_row_count != expected_target_row_count:
+        failures.append(
+            "target row count mismatch: "
+            f"expected {expected_target_row_count}, got {actual_target_row_count}"
+        )
+
+    shared_rows_count = len(shared_training_rows)
+    if shared_rows_count != n_replications:
+        failures.append(
+            "shared reference training row count mismatch: "
+            f"expected {n_replications}, got {shared_rows_count}"
+        )
+    shared_replications = [int(r.get("replication", -1)) for r in shared_training_rows]
+    shared_replication_set = set(shared_replications)
+    if len(shared_replication_set) != n_replications or shared_replication_set != set(range(n_replications)):
+        failures.append("shared reference training replications are not exactly one record per replication")
 
     for cid in CONTRACT_IDS:
         cfg = _make_stage8_contract_cfg(cid, n_paths=10, seed=0, monitoring_dates=monitoring_dates)
@@ -2347,6 +2456,9 @@ def _build_validation_report(
             "fixed_ncv_epoch": fixed_ncv_epoch,
             "ncv_epoch_source": ncv_epoch_source,
             "experiment_role": experiment_role,
+            "include_transfer_methods": include_transfer_methods,
+            "include_scratch_ncv": include_scratch_ncv,
+            "expected_target_rows": expected_target_row_count,
             "runtime_regime_ratio_threshold": runtime_regime_ratio_threshold,
         },
     }
@@ -2487,6 +2599,7 @@ def run_stage8(
     effective_ncv_epoch_source = ncv_epoch_source or str(profile_cfg.get("ncv_epoch_source", STAGE8_NCV_EPOCH_SOURCE))
     effective_hidden_width = int(profile_cfg.get("hidden_width", STAGE8_HIDDEN_WIDTH))
     effective_include_transfer_methods = bool(profile_cfg.get("include_transfer_methods", True))
+    effective_include_scratch_ncv = bool(profile_cfg.get("include_scratch_ncv", True))
     effective_experiment_role = (
         str(profile_cfg.get("experiment_role"))
         if experiment_role == STAGE8_EXPERIMENT_ROLE and profile_cfg.get("experiment_role")
@@ -2511,7 +2624,8 @@ def run_stage8(
         "Profile="
         f"{profile}, base_seed={base_seed}, replications={n_replications}, torch_available={torch_available}, "
         f"monitoring_dates={effective_monitoring_dates}, ncv_epoch={effective_ncv_epoch}, "
-        f"hidden_width={effective_hidden_width}, include_transfer_methods={effective_include_transfer_methods}"
+        f"hidden_width={effective_hidden_width}, include_transfer_methods={effective_include_transfer_methods}, "
+        f"include_scratch_ncv={effective_include_scratch_ncv}"
     )
 
     config_snapshot = {
@@ -2530,6 +2644,7 @@ def run_stage8(
         "hidden_width": effective_hidden_width,
         "trainable_parameters": _trainable_parameter_count(effective_monitoring_dates, effective_hidden_width),
         "include_transfer_methods": effective_include_transfer_methods,
+        "include_scratch_ncv": effective_include_scratch_ncv,
         "fixed_ncv_epoch": effective_ncv_epoch,
         "ncv_epoch_source": effective_ncv_epoch_source,
         "experiment_role": effective_experiment_role,
@@ -2598,6 +2713,7 @@ def run_stage8(
             monitoring_dates=effective_monitoring_dates,
             hidden_width=effective_hidden_width,
             include_transfer_methods=effective_include_transfer_methods,
+            include_scratch_ncv=effective_include_scratch_ncv,
             ncv_epoch=effective_ncv_epoch,
             ncv_epoch_source=effective_ncv_epoch_source,
             experiment_role=effective_experiment_role,
@@ -2622,6 +2738,7 @@ def run_stage8(
         variance_ratio_summary=variance_ratio_summary,
         n_replications=n_replications,
         include_transfer_methods=effective_include_transfer_methods,
+        include_scratch_ncv=effective_include_scratch_ncv,
     )
 
     runtime_summary_rows, aggregate_rows_with_runtime = _runtime_summary(
@@ -2641,6 +2758,7 @@ def run_stage8(
         n_pilot=n_pilot,
         n_pricing=n_pricing,
         include_transfer_methods=effective_include_transfer_methods,
+        include_scratch_ncv=effective_include_scratch_ncv,
     )
     _write_csv(run_dir / "equal_pricing_observations_summary.csv", equal_obs_rows)
 
@@ -2651,6 +2769,7 @@ def run_stage8(
         budget=n_pricing,
         q_values=amortised_q_values,
         include_transfer_methods=effective_include_transfer_methods,
+        include_scratch_ncv=effective_include_scratch_ncv,
     )
     _write_csv(run_dir / "equal_budget_projected_results.csv", equal_budget_rows)
 
@@ -2662,6 +2781,7 @@ def run_stage8(
         n_pilot=n_pilot,
         shared_train_runtime_median=shared_train_runtime_median,
         include_transfer_methods=effective_include_transfer_methods,
+        include_scratch_ncv=effective_include_scratch_ncv,
     )
     _write_csv(run_dir / "matched_accuracy_results.csv", matched_rows)
 
@@ -2670,6 +2790,7 @@ def run_stage8(
         matched_accuracy_rows=matched_rows,
         shared_training_rows=shared_training_rows,
         include_transfer_methods=effective_include_transfer_methods,
+        include_scratch_ncv=effective_include_scratch_ncv,
     )
     _write_csv(run_dir / "break_even_equal_observations.csv", break_even_equal_obs)
     _write_csv(run_dir / "break_even_matched_accuracy.csv", break_even_matched)
@@ -2715,6 +2836,7 @@ def run_stage8(
 
     validation_report = _build_validation_report(
         all_per_rep,
+        shared_training_rows,
         seed_manifest,
         n_replications,
         base_seed,
@@ -2722,11 +2844,18 @@ def run_stage8(
         fixed_ncv_epoch=effective_ncv_epoch,
         ncv_epoch_source=effective_ncv_epoch_source,
         experiment_role=effective_experiment_role,
+        include_transfer_methods=effective_include_transfer_methods,
+        include_scratch_ncv=effective_include_scratch_ncv,
     )
     _write_json(run_dir / "validation_report.json", validation_report)
 
     if profile == "dissertation":
-        ok, failures = _check_required_success(all_per_rep, n_replications)
+        ok, failures = _check_required_success(
+            all_per_rep,
+            n_replications,
+            include_transfer_methods=effective_include_transfer_methods,
+            include_scratch_ncv=effective_include_scratch_ncv,
+        )
         if not ok:
             _write_json(run_dir / "dissertation_completion_failures.json", {"failures": failures})
             raise RuntimeError(
@@ -2791,6 +2920,8 @@ def run_stage8(
 - trainable parameters: {_trainable_parameter_count(effective_monitoring_dates, effective_hidden_width)}
 - NCV training paths: {n_training}
 - NCV checkpoint: {effective_ncv_epoch}
+- include transfer methods: {effective_include_transfer_methods}
+- include scratch NCV: {effective_include_scratch_ncv}
 - experiment role: {effective_experiment_role}
 - sensitivity interpretation: {"joint monitoring-frequency/input-dimensionality sensitivity" if effective_monitoring_dates != default_monitoring_dates else "primary Stage 8 default configuration"}
 - fixed NCV epoch: {effective_ncv_epoch} ({effective_ncv_epoch_source})
